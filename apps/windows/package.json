@@ -8,7 +8,9 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "bundle:python": "python scripts/bundle_python.py",
+    "build:standalone": "python scripts/bundle_python.py && tauri build --config src-tauri/tauri.standalone.json"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

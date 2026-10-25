@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import struct
 import sys
 import traceback
@@ -47,7 +48,14 @@ def repo_root() -> Path | None:
 
 
 def ensure_import_path() -> None:
-    """Prefer the checkout's ``src/`` so the sidecar matches this tree."""
+    """Prefer the checkout's ``src/`` so a dev sidecar matches this tree.
+
+    The standalone installer sets ``SPEKTRAFILM_BUNDLED=1``. That process must
+    import the copy in its own site-packages, including when this script is
+    still sitting inside a checkout for the build-machine check.
+    """
+    if os.environ.get("SPEKTRAFILM_BUNDLED") == "1":
+        return
     root = repo_root()
     if root is None:
         return
@@ -79,6 +87,8 @@ def health() -> dict:
         "sidecar_version": SIDECAR_VERSION,
         "protocol": PROTOCOL_VERSION,
         "python": sys.version.split()[0],
+        "executable": sys.executable,
+        "bundled": os.environ.get("SPEKTRAFILM_BUNDLED") == "1",
     }
 
 
@@ -115,6 +125,8 @@ def version() -> dict:
         "protocol": PROTOCOL_VERSION,
         "spektrafilm": spektrafilm_version,
         "python": sys.version.split()[0],
+        "executable": sys.executable,
+        "bundled": os.environ.get("SPEKTRAFILM_BUNDLED") == "1",
     }
 
 

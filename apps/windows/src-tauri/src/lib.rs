@@ -55,8 +55,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            let started = sidecar::locate_script(app.handle())
-                .and_then(|script| sidecar::Sidecar::spawn(&script));
+            let started = sidecar::start(app.handle());
             if let Err(err) = &started {
                 eprintln!("[sidecar] {err}");
             }

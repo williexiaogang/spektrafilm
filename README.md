@@ -221,17 +221,16 @@ Dependency direction:
 
 Film and paper tiles are `preview_mode` develops of the built-in chart at a 96px long edge, cached in the sidecar (`stock_thumb`). A cold catalog is one small simulation per tile, in series. Changing the paper refreshes the film strip, and changing the film refreshes the paper strip. Exposure, the filters, and the loaded frame do not.
 
-The sidecar needs the same install as the rest of the project: **Python 3.13** and `pip install -e .` (or `pip install -e ".[dev]"` if you want the tests). It does not vendor a second copy of the simulator. RAW import uses that install's `rawpy` path (`load_and_process_raw_file`), the same one the Qt GUI calls.
+Day-to-day development still uses a normal install: **Python 3.13** and `pip install -e .` (or `pip install -e ".[dev]"` if you want the tests). `tauri dev` launches that interpreter. RAW import uses the same `load_and_process_raw_file` path as the Qt GUI.
 
 From `apps/windows` on Windows, after that install, plus Node.js, Rust 1.90 or newer (`rustup update`), and the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) (WebView2 and the Visual Studio C++ build tools):
 
 ```bash
 npm install
 npm run tauri dev
-npm run tauri build
 ```
 
-`tauri build` writes an NSIS installer and an MSI. Those bundles start the sidecar with the system Python; they do not embed the scientific stack. Set `SPEKTRAFILM_PYTHON` if `py -3.13` is not the interpreter that has spektrafilm installed.
+A double-click installer that does **not** ask the user to install Python is a separate build. It embeds a private CPython 3.13 prefix and the sidecar's wheels. Commands, size, and the smoke-test checklist are in [`apps/windows/README.md`](apps/windows/README.md) under "Building the standalone installer". Plain `npm run tauri build` still produces the thin NSIS/MSI shells that expect Python 3.13 on the machine.
 
 Protocol, file paths, and day-to-day commands are in [`apps/windows/README.md`](apps/windows/README.md). The stdio JSON protocol is in [`apps/windows/sidecar/PROTOCOL.md`](apps/windows/sidecar/PROTOCOL.md).
 

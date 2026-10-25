@@ -444,7 +444,7 @@ export default function App() {
 
   const lampTitle = [
     job.text,
-    health?.python ? `Python ${health.python}` : "",
+    health?.python ? `Python ${health.python}${health.bundled ? " · bundled" : ""}` : "",
     version?.spektrafilm ? `spektrafilm ${version.spektrafilm}` : "",
     health ? `protocol ${health.protocol}` : "",
   ]

@@ -32,6 +32,7 @@
     "publisher": "SpektraFilm contributors",
     "copyright": "Copyright SpektraFilm contributors. Licensed under the GNU GPL v3.",
     "shortDescription": "Spectral film simulation",
+    "licenseFile": "../../LICENSE",
     "longDescription": "Windows desktop shell for SpektraFilm. The physical simulation stays in the Python runtime. GPLv3.",
     "resources": {
       "../sidecar/server.py": "sidecar/server.py",
