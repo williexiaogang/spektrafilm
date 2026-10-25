@@ -219,7 +219,7 @@ Dependency direction:
 
 `apps/windows` is a Tauri 2 shell aimed at Windows: a React UI, a Rust process host, and a Python sidecar that calls the existing runtime (`init_params`, `simulate_preview`, `list_profiles` / `load_profile`). The physical pipeline under `src/spektrafilm` stays the source of truth. The Qt + napari GUI is unchanged and is still what the `spektrafilm` command launches.
 
-The sidecar needs the same install as the rest of the project: **Python 3.13** and `pip install -e .` (or `pip install -e ".[dev]"` if you want the tests). It does not vendor a second copy of the simulator.
+The sidecar needs the same install as the rest of the project: **Python 3.13** and `pip install -e .` (or `pip install -e ".[dev]"` if you want the tests). It does not vendor a second copy of the simulator. RAW import uses that install's `rawpy` path (`load_and_process_raw_file`), the same one the Qt GUI calls.
 
 From `apps/windows` on Windows, after that install, plus Node.js, Rust 1.90 or newer (`rustup update`), and the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) (WebView2 and the Visual Studio C++ build tools):
 

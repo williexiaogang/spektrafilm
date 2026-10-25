@@ -14,13 +14,13 @@ apps/windows/
 
 On launch the Rust shell starts `python -u sidecar/server.py`, then the UI asks it to list film and print profiles and to run one preview. Requests are newline-delimited JSON. There is no network port.
 
-## What the first slice does
+## What this shell does
 
 - Health and version.
 - Film stocks (`info.stage == filming`) and print papers (`info.stage == printing`), via `list_profiles` and `load_profile`.
-- One preview: `init_params` + `simulate_preview`, with `settings.preview_mode` turned on. The result is an sRGB PNG the center pane can show.
-- A built-in linear chart, or a linear image path passed to `load_image_oiio`.
-- Exposure compensation, in EV. Grain, halation, and enlarger filter shifts are visible in the layout and not wired yet.
+- Preview and scan: `init_params`, then `simulate_preview` or `simulate`. Preview turns on `settings.preview_mode`. Scan leaves it off so grain and the other preview-mode cuts stay available. Both still resize to the size control.
+- Exposure compensation, enlarger yellow/magenta filter shifts, and the high-level halation and scatter amount/size controls. Those are existing runtime fields.
+- A built-in linear chart, a linear image path (`load_image_oiio`), or a camera RAW. RAW import calls `load_and_process_raw_file` (rawpy) with the same white-balance modes as the Qt GUI: as shot, daylight, tungsten, and custom temperature plus tint. The demosaiced buffer stays in the sidecar and is reused until the file or white balance changes.
 
 The README at the repo root still shows `create_params`. In this tree the function is `init_params` (see `src/spektrafilm/runtime/params_builder.py`). The sidecar uses `init_params`.
 
@@ -52,7 +52,7 @@ npm install
 npm run tauri dev
 ```
 
-The window opens the Vite dev server at `http://localhost:1420` inside the Tauri webview. The Python process starts with the window. Pick a film and a paper, then **Develop preview**.
+The window opens the Vite dev server at `http://localhost:1420` inside the Tauri webview. The Python process starts with the window. Pick a film and a paper, or open a RAW file, then **Develop preview**. RAW demosaic uses the same Python environment as the sidecar. If `rawpy` is missing, the status panel shows that error and the chart path still works.
 
 If `py -3.13` is not the interpreter that has the package, point at it before launching:
 

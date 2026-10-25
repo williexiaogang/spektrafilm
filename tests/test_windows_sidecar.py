@@ -121,3 +121,146 @@ def test_list_profiles_and_builtin_preview_against_runtime():
     assert result["source"] == "builtin-chart"
     assert result["output_color_space"] == "sRGB"
     assert result["preview_mode"] is True
+    assert result["render_mode"] == "preview"
+
+
+def test_import_raw_rejects_a_missing_file_and_unknown_white_balance(tmp_path):
+    missing = tmp_path / "missing.nef"
+    missing_response = server.dispatch(
+        {
+            "id": 8,
+            "method": "import_raw",
+            "params": {"path": str(missing), "white_balance": "as_shot"},
+        }
+    )
+    assert missing_response["ok"] is False
+    assert missing_response["error"]["code"] == "runtime_error"
+    assert "not found" in missing_response["error"]["message"].lower()
+
+    bad_balance = server.dispatch(
+        {
+            "id": 9,
+            "method": "import_raw",
+            "params": {"path": str(missing), "white_balance": "flash"},
+        }
+    )
+    assert bad_balance["ok"] is False
+    assert "white_balance" in bad_balance["error"]["message"]
+
+    bad_mode = server.dispatch(
+        {"id": 10, "method": "preview", "params": {"render_mode": "print"}}
+    )
+    assert bad_mode["ok"] is False
+    assert "render_mode" in bad_mode["error"]["message"]
+
+
+def test_raw_cache_and_scan_params_when_runtime_imports(tmp_path):
+    try:
+        server.ensure_import_path()
+        from spektrafilm import init_params  # noqa: F401
+    except Exception as exc:
+        pytest.skip(f"spektrafilm runtime dependencies are not installed: {exc}")
+
+    raw_path = tmp_path / "frame.dng"
+    raw_path.write_bytes(b"not-a-real-raw")
+    loads = {"count": 0}
+    seen = {}
+
+    def fake_load(path, settings):
+        loads["count"] += 1
+        import numpy as np
+
+        assert path == str(raw_path)
+        assert settings["white_balance"] == "custom"
+        assert settings["temperature"] == 3200.0
+        image = np.full((6, 8, 3), 0.25, dtype=np.float64)
+        return image, "Test lens @ 50mm f/2.0"
+
+    def fake_simulate(image, params, render_mode):
+        seen["render_mode"] = render_mode
+        seen["preview_mode"] = params.settings.preview_mode
+        seen["exposure"] = params.camera.exposure_compensation_ev
+        seen["y"] = params.enlarger.y_filter_shift
+        seen["m"] = params.enlarger.m_filter_shift
+        seen["scatter"] = params.film_render.halation.scatter_amount
+        seen["scatter_size"] = params.film_render.halation.scatter_spatial_scale
+        seen["halation"] = params.film_render.halation.halation_amount
+        seen["halation_size"] = params.film_render.halation.halation_spatial_scale
+        seen["halation_active"] = params.film_render.halation.active
+        seen["input"] = params.io.input_color_space
+        return image
+
+    original_load = server.load_raw_image
+    original_run = server.run_simulation
+    server.load_raw_image = fake_load
+    server.run_simulation = fake_simulate
+    server._RAW_CACHE = None
+    try:
+        imported = server.dispatch(
+            {
+                "id": 1,
+                "method": "import_raw",
+                "params": {
+                    "path": str(raw_path),
+                    "white_balance": "custom",
+                    "temperature": 3200,
+                    "tint": 1.1,
+                    "lens_correction": False,
+                },
+            }
+        )
+        assert imported["ok"] is True, imported
+        assert imported["result"]["width"] == 8
+        assert imported["result"]["height"] == 6
+        assert imported["result"]["lens_summary"] == "Test lens @ 50mm f/2.0"
+        assert imported["result"]["input_color_space"] == "ProPhoto RGB"
+        assert loads["count"] == 1
+
+        preview = server.dispatch(
+            {
+                "id": 2,
+                "method": "preview",
+                "params": {
+                    "source": "raw",
+                    "image_path": str(raw_path),
+                    "white_balance": "custom",
+                    "temperature": 3200,
+                    "tint": 1.1,
+                    "render_mode": "scan",
+                    "film_profile": "kodak_portra_400",
+                    "print_profile": "kodak_portra_endura",
+                    "exposure_compensation_ev": -0.5,
+                    "y_filter_shift": 15,
+                    "m_filter_shift": -8,
+                    "halation_active": True,
+                    "scatter_amount": 0.4,
+                    "scatter_spatial_scale": 1.5,
+                    "halation_amount": 0.7,
+                    "halation_spatial_scale": 1.2,
+                    "max_size": 24,
+                },
+            }
+        )
+        assert preview["ok"] is True, preview
+        assert loads["count"] == 1
+        assert preview["result"]["raw_cache"] == "hit"
+        assert preview["result"]["render_mode"] == "scan"
+        assert preview["result"]["preview_mode"] is False
+        assert seen == {
+            "render_mode": "scan",
+            "preview_mode": False,
+            "exposure": -0.5,
+            "y": 15.0,
+            "m": -8.0,
+            "scatter": 0.4,
+            "scatter_size": 1.5,
+            "halation": 0.7,
+            "halation_size": 1.2,
+            "halation_active": True,
+            "input": "ProPhoto RGB",
+        }
+        assert preview["result"]["png_base64"]
+    finally:
+        server.load_raw_image = original_load
+        server.run_simulation = original_run
+        server._RAW_CACHE = None

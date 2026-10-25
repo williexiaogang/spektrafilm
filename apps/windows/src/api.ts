@@ -31,30 +31,110 @@ export type ProfileList = {
   profiles: Profile[];
 };
 
+export type WhiteBalance = "as_shot" | "daylight" | "tungsten" | "custom";
+export type RenderMode = "preview" | "scan";
+export type PreviewSource = "builtin-chart" | "path" | "raw";
+
+export type RawImport = {
+  source: "raw";
+  path: string;
+  width: number;
+  height: number;
+  input_color_space: string;
+  white_balance: WhiteBalance;
+  temperature: number | null;
+  tint: number | null;
+  lens_correction: boolean;
+  lens_summary: string | null;
+  lens_applied: boolean;
+  cached: boolean;
+};
+
 export type PreviewResult = {
   film_profile: string;
   print_profile: string;
-  source: "builtin-chart" | "path" | string;
+  source: PreviewSource | string;
   image_path: string | null;
+  input_width: number;
+  input_height: number;
   width: number;
   height: number;
   mime: string;
   png_base64: string;
   elapsed_ms: number;
+  render_mode: RenderMode;
   preview_mode: boolean;
   max_size: number;
   exposure_compensation_ev: number;
+  y_filter_shift: number;
+  m_filter_shift: number;
+  halation_active: boolean;
+  scatter_amount: number;
+  scatter_spatial_scale: number;
+  halation_amount: number;
+  halation_spatial_scale: number;
   input_color_space: string;
   output_color_space: string;
+  raw_cache: "hit" | "miss" | null;
+  white_balance: WhiteBalance | null;
+  lens_summary: string | null;
 };
 
 export type PreviewRequest = {
   film_profile: string;
   print_profile: string;
+  source: PreviewSource;
   image_path: string | null;
+  render_mode: RenderMode;
   max_size: number;
   exposure_compensation_ev: number;
+  y_filter_shift: number;
+  m_filter_shift: number;
+  halation_active: boolean;
+  scatter_amount: number;
+  scatter_spatial_scale: number;
+  halation_amount: number;
+  halation_spatial_scale: number;
+  white_balance?: WhiteBalance;
+  temperature?: number;
+  tint?: number;
+  lens_correction?: boolean;
 };
+
+export type RawImportRequest = {
+  path: string;
+  white_balance: WhiteBalance;
+  temperature: number;
+  tint: number;
+  lens_correction: boolean;
+};
+
+const RAW_EXTENSIONS = [
+  "3fr",
+  "arw",
+  "cr2",
+  "cr3",
+  "crw",
+  "dcr",
+  "dng",
+  "erf",
+  "fff",
+  "iiq",
+  "kdc",
+  "mef",
+  "mos",
+  "mrw",
+  "nef",
+  "nrw",
+  "orf",
+  "pef",
+  "raf",
+  "raw",
+  "rw2",
+  "rwl",
+  "srw",
+  "x3f",
+];
 
 export function inTauri(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -83,6 +163,24 @@ export function listPrintProfiles(): Promise<ProfileList> {
 
 export function runPreview(params: PreviewRequest): Promise<PreviewResult> {
   return call<PreviewResult>("run_preview", { params });
+}
+
+export function importRaw(params: RawImportRequest): Promise<RawImport> {
+  return call<RawImport>("import_raw", { params });
+}
+
+export async function pickRawFile(): Promise<string | null> {
+  const { open } = await import("@tauri-apps/plugin-dialog");
+  const selected = await open({
+    multiple: false,
+    directory: false,
+    title: "Open RAW",
+    filters: [{ name: "Camera RAW", extensions: RAW_EXTENSIONS }],
+  });
+  if (Array.isArray(selected)) {
+    return selected[0] ?? null;
+  }
+  return selected;
 }
 
 export function formatErr(err: unknown): string {

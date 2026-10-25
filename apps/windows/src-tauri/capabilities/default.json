@@ -9,6 +9,8 @@
     "allow-sidecar-version",
     "allow-list-film-profiles",
     "allow-list-print-profiles",
-    "allow-run-preview"
+    "allow-import-raw",
+    "allow-run-preview",
+    "dialog:allow-open"
   ]
 }

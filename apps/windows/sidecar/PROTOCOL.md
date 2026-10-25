@@ -98,67 +98,166 @@ then keeps stocks whose `info.stage` is `filming` (film) or `printing` (print).
 
 Summaries are cached for the life of the process.
 
-### `preview`
+### `import_raw`
 
-Runs one preview and returns an 8-bit sRGB PNG.
+Demosaic one camera RAW into a linear RGB buffer and keep it in the sidecar.
+The pixels are not returned on the wire. A later `preview` with `source: "raw"`
+reuses the buffer when the path and white-balance settings match.
+
+The loader is `spektrafilm.utils.raw_file_processor.load_and_process_raw_file`
+(rawpy demosaic, the same white-balance modes as the Qt GUI). `rawpy`,
+`exiv2`, and `lensfunpy` come from the existing package install. If they are
+missing, the response is `runtime_error` and names that dependency.
 
 ```json
 {
   "id": 3,
-  "method": "preview",
+  "method": "import_raw",
   "params": {
-    "film_profile": "kodak_portra_400",
-    "print_profile": "kodak_portra_endura",
-    "image_path": null,
-    "max_size": 48,
-    "exposure_compensation_ev": 0.0
+    "path": "C:\\photos\\frame.nef",
+    "white_balance": "custom",
+    "temperature": 5200,
+    "tint": 1.0,
+    "lens_correction": false,
+    "output_color_space": "ProPhoto RGB"
   }
 }
 ```
 
-| Param                        | Default                 | Notes |
-| ---------------------------- | ----------------------- | ----- |
-| `film_profile`               | `kodak_portra_400`      | Passed to `init_params`. |
-| `print_profile`              | `kodak_portra_endura`   | Passed to `init_params`. |
-| `image_path`                 | null                    | Linear image readable by `load_image_oiio`. Null uses a built-in chart. |
-| `max_size`                   | `48`                    | Clamped to 16..256. Sets `settings.preview_max_size`. |
-| `exposure_compensation_ev`   | `0`                     | Clamped to -5..+5. |
-| `input_color_space`          | `ProPhoto RGB` for files | Ignored for the built-in chart, which is linear sRGB. |
-| `input_cctf_decoding`        | `false`                 | File inputs only. |
+| Param | Default | Notes |
+| ----- | ------- | ----- |
+| `path` | required | Also accepted as `image_path`. |
+| `white_balance` | `as_shot` | `as_shot`, `daylight`, `tungsten`, or `custom`. |
+| `temperature` | `5500` | Kelvin. Used only for `custom`. Clamped to 1000..15000. |
+| `tint` | `1` | Green multiplier. Used only for `custom`. Clamped to 0..4. |
+| `lens_correction` | `false` | lensfun, same flag the Qt importer passes. |
+| `output_color_space` | `ProPhoto RGB` | Linear. This becomes the simulation input color space. |
+
+```json
+{
+  "source": "raw",
+  "path": "C:\\photos\\frame.nef",
+  "width": 6000,
+  "height": 4000,
+  "input_color_space": "ProPhoto RGB",
+  "white_balance": "as_shot",
+  "temperature": null,
+  "tint": null,
+  "lens_correction": false,
+  "lens_summary": null,
+  "lens_applied": false,
+  "cached": true
+}
+```
+
+`lens_summary` is set when lensfun identified a lens. An empty summary with
+`lens_correction: true` means the correction was requested and not applied.
+
+### `preview`
+
+Runs one preview or a scan-mode pass and returns an 8-bit sRGB PNG.
+
+`render_mode: "preview"` sets `settings.preview_mode` and calls
+`simulate_preview` (the runtime drops grain and several blurs).
+`render_mode: "scan"` leaves `preview_mode` off and calls `simulate`, so those
+effects stay available. Both modes still resize to `max_size` before the
+pipeline. This shell does not request a full-resolution scan.
+
+```json
+{
+  "id": 4,
+  "method": "preview",
+  "params": {
+    "film_profile": "kodak_portra_400",
+    "print_profile": "kodak_portra_endura",
+    "source": "raw",
+    "image_path": "C:\\photos\\frame.nef",
+    "white_balance": "as_shot",
+    "render_mode": "preview",
+    "max_size": 64,
+    "exposure_compensation_ev": 0.0,
+    "y_filter_shift": 10,
+    "m_filter_shift": -5,
+    "halation_active": true,
+    "scatter_amount": 1.0,
+    "scatter_spatial_scale": 1.0,
+    "halation_amount": 1.0,
+    "halation_spatial_scale": 1.0
+  }
+}
+```
+
+| Param | Default | Notes |
+| ----- | ------- | ----- |
+| `film_profile` | `kodak_portra_400` | Passed to `init_params`. |
+| `print_profile` | `kodak_portra_endura` | Passed to `init_params`. |
+| `source` | `builtin-chart`, or `path` when `image_path` is set | `builtin-chart`, `path`, or `raw`. |
+| `image_path` | null | Linear file for `path` (`load_image_oiio`). RAW path for `raw`. |
+| `render_mode` | `preview` | `preview` or `scan`. |
+| `max_size` | `64` | Clamped to 16..256. Sets `settings.preview_max_size`. |
+| `exposure_compensation_ev` | `0` | Clamped to -8..+8. Bias on `camera.exposure_compensation_ev`. |
+| `y_filter_shift` | `0` | `enlarger.y_filter_shift`, Kodak CC steps, clamped to -200..200. |
+| `m_filter_shift` | `0` | `enlarger.m_filter_shift`, same clamp. |
+| `halation_active` | model default (`true`) | `film_render.halation.active`. |
+| `scatter_amount` | `1` | `film_render.halation.scatter_amount`, clamped to 0..4. |
+| `scatter_spatial_scale` | `1` | `film_render.halation.scatter_spatial_scale`, clamped to 0..4. |
+| `halation_amount` | `1` | `film_render.halation.halation_amount`, clamped to 0..4. |
+| `halation_spatial_scale` | `1` | `film_render.halation.halation_spatial_scale`, clamped to 0..4. |
+| `input_color_space` | `ProPhoto RGB` for linear files | Ignored for the chart (linear sRGB) and for RAW (uses the import color space). |
+| `input_cctf_decoding` | `false` | Linear-file inputs only. |
+| `white_balance`, `temperature`, `tint`, `lens_correction` | same as `import_raw` | Used when `source` is `raw`. A cache miss re-imports. |
+
+White-balance fields on a RAW preview use the same rules as `import_raw`.
 
 Call sequence inside the sidecar:
 
-1. `init_params(film_profile, print_profile)` from `spektrafilm`.
-2. `settings.preview_mode = True` so `digest_params` uses the runtime preview path.
-3. Output color space `sRGB` with `output_cctf_encoding = True` (display PNG).
-4. `simulate_preview(image, params)`.
+1. Resolve the image: built-in chart, `load_image_oiio`, or the RAW cache.
+2. `init_params(film_profile, print_profile)` from `spektrafilm`.
+3. Copy the controls above onto the runtime parameter object.
+4. Output color space `sRGB` with `output_cctf_encoding = True` (display PNG).
+5. `simulate_preview` or `simulate`.
 
 The built-in chart is a small synthetic linear ramp, not a measured color target.
-File inputs should be scene-referred linear images (16-bit or float TIFF/EXR),
-the same expectation as the Qt file loader. The loader is
-`spektrafilm.utils.io.load_image_oiio`.
+Linear files should be scene-referred (16-bit or float TIFF/EXR), the same
+expectation as the Qt file loader.
 
 ```json
 {
   "film_profile": "kodak_portra_400",
   "print_profile": "kodak_portra_endura",
-  "source": "builtin-chart",
-  "image_path": null,
-  "width": 24,
-  "height": 12,
+  "source": "raw",
+  "image_path": "C:\\photos\\frame.nef",
+  "input_width": 6000,
+  "input_height": 4000,
+  "width": 64,
+  "height": 43,
   "mime": "image/png",
   "png_base64": "iVBORw0KGgo...",
   "elapsed_ms": 1200,
+  "render_mode": "preview",
   "preview_mode": true,
-  "max_size": 48,
+  "max_size": 64,
   "exposure_compensation_ev": 0.0,
-  "input_color_space": "sRGB",
-  "output_color_space": "sRGB"
+  "y_filter_shift": 10,
+  "m_filter_shift": -5,
+  "halation_active": true,
+  "scatter_amount": 1.0,
+  "scatter_spatial_scale": 1.0,
+  "halation_amount": 1.0,
+  "halation_spatial_scale": 1.0,
+  "input_color_space": "ProPhoto RGB",
+  "output_color_space": "sRGB",
+  "raw_cache": "hit",
+  "white_balance": "as_shot",
+  "lens_summary": null
 }
 ```
 
+`raw_cache` is `hit`, `miss`, or `null` (not a RAW source).
+
 The first preview can take a while: Numba compiles on first use, and the
-spectral pipeline is per pixel. Keep `max_size` small.
+spectral pipeline is per pixel. Keep `max_size` small. RAW demosaic is a
+separate cost and happens on import or on a cache miss.
 
 ## Manual check
 

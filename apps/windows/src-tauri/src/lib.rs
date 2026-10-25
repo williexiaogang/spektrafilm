@@ -35,9 +35,15 @@ fn run_preview(state: State<SidecarState>, params: Value) -> Result<Value, Strin
     state.call("preview", params)
 }
 
+#[tauri::command]
+fn import_raw(state: State<SidecarState>, params: Value) -> Result<Value, String> {
+    state.call("import_raw", params)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let started = sidecar::locate_script(app.handle())
                 .and_then(|script| sidecar::Sidecar::spawn(&script));
@@ -52,6 +58,7 @@ pub fn run() {
             sidecar_version,
             list_film_profiles,
             list_print_profiles,
+            import_raw,
             run_preview,
         ])
         .build(tauri::generate_context!())

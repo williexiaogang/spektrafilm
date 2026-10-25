@@ -8,6 +8,7 @@ fn main() {
             "sidecar_version",
             "list_film_profiles",
             "list_print_profiles",
+            "import_raw",
             "run_preview",
         ]),
     ))

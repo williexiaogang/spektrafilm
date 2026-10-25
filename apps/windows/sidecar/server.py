@@ -21,9 +21,11 @@ import zlib
 from pathlib import Path
 
 PROTOCOL_VERSION = 1
-SIDECAR_VERSION = "0.1.0"
+SIDECAR_VERSION = "0.2.0"
+_WHITE_BALANCE_MODES = frozenset({"as_shot", "daylight", "tungsten", "custom"})
 
 _PROFILE_SUMMARIES: list[dict] | None = None
+_RAW_CACHE: dict | None = None
 
 
 def repo_root() -> Path | None:
@@ -261,76 +263,310 @@ def _result_to_png(result) -> tuple[bytes, int, int]:
     return encode_png_rgb8(u8.tobytes(), width, height), width, height
 
 
-def preview_cmd(params: dict) -> dict:
-    """Run one preview through the existing runtime.
+def _optional_path(value, *, field: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f"{field} must be a string or null")
+    return value.strip() or None
 
-    ``init_params`` plus ``simulate_preview`` are the public entry points.
-    ``settings.preview_mode`` is the runtime's own fast-preview switch.
+
+def _render_mode(params: dict) -> str:
+    mode = params.get("render_mode") or "preview"
+    if mode not in ("preview", "scan"):
+        raise ValueError("render_mode must be 'preview' or 'scan'")
+    return mode
+
+
+def _white_balance_settings(params: dict) -> dict:
+    mode = params.get("white_balance") or "as_shot"
+    if mode not in _WHITE_BALANCE_MODES:
+        raise ValueError("white_balance must be 'as_shot', 'daylight', 'tungsten', or 'custom'")
+    temperature = _clamp_float(params.get("temperature"), default=5500.0, lo=1000.0, hi=15000.0)
+    tint = _clamp_float(params.get("tint"), default=1.0, lo=0.0, hi=4.0)
+    lens_correction = bool(params.get("lens_correction") or False)
+    output_color_space = str(params.get("output_color_space") or "ProPhoto RGB")
+    return {
+        "white_balance": mode,
+        "temperature": temperature if mode == "custom" else None,
+        "tint": tint if mode == "custom" else None,
+        "lens_correction": lens_correction,
+        "output_color_space": output_color_space,
+    }
+
+
+def _raw_fingerprint(path: str, settings: dict) -> tuple:
+    return (
+        str(Path(path).expanduser().resolve()),
+        settings["white_balance"],
+        settings["temperature"],
+        settings["tint"],
+        settings["lens_correction"],
+        settings["output_color_space"],
+    )
+
+
+def load_raw_image(path: str, settings: dict):
+    """Demosaic a RAW file with the runtime's existing rawpy helper.
+
+    The returned buffer is linear RGB in ``settings['output_color_space']``.
     """
-    import time
-
-    film_profile = str(params.get("film_profile") or "kodak_portra_400")
-    print_profile = str(params.get("print_profile") or "kodak_portra_endura")
-    image_path = params.get("image_path")
-    if isinstance(image_path, str):
-        image_path = image_path.strip() or None
-    elif image_path is not None:
-        raise ValueError("image_path must be a string or null")
-
-    max_size = _clamp_int(params.get("max_size"), default=48, lo=16, hi=256)
-    exposure = _clamp_float(
-        params.get("exposure_compensation_ev"),
-        default=0.0,
-        lo=-5.0,
-        hi=5.0,
-    )
-
     ensure_import_path()
-    from spektrafilm import init_params, simulate_preview
+    try:
+        from spektrafilm.utils.raw_file_processor import load_and_process_raw_file
+    except ImportError as exc:
+        raise RuntimeError(
+            "RAW import needs the spektrafilm install "
+            "(rawpy, exiv2, lensfunpy, and colour-science). "
+            f"{exc}"
+        ) from exc
 
-    if image_path:
-        image = _load_linear_image(image_path)
-        source = "path"
-        input_color_space = str(params.get("input_color_space") or "ProPhoto RGB")
-        input_cctf_decoding = bool(params.get("input_cctf_decoding") or False)
-    else:
-        image = _builtin_chart()
-        source = "builtin-chart"
-        input_color_space = "sRGB"
-        input_cctf_decoding = False
-
-    runtime_params = init_params(
-        film_profile=film_profile,
-        print_profile=print_profile,
+    lens_info: dict[str, str] = {}
+    image = load_and_process_raw_file(
+        path,
+        white_balance=settings["white_balance"],
+        temperature=settings["temperature"],
+        tint=settings["tint"],
+        lens_correction=settings["lens_correction"],
+        output_colorspace=settings["output_color_space"],
+        output_cctf_encoding=False,
+        lens_info_out=lens_info,
     )
-    runtime_params.settings.preview_mode = True
+    return _as_rgb(image), lens_info.get("summary") or None
+
+
+def _require_raw_file(path: str) -> Path:
+    file_path = Path(path).expanduser()
+    if file_path.is_dir():
+        raise ValueError(f"expected a RAW file, got a directory: {file_path}")
+    if not file_path.is_file():
+        raise FileNotFoundError(f"RAW file not found: {file_path}")
+    return file_path
+
+
+def _remember_raw(fingerprint: tuple, image, meta: dict) -> None:
+    global _RAW_CACHE
+    _RAW_CACHE = {"fingerprint": fingerprint, "image": image, "meta": meta}
+
+
+def _raw_meta(path: Path, image, settings: dict, lens_summary: str | None) -> dict:
+    height, width = int(image.shape[0]), int(image.shape[1])
+    return {
+        "source": "raw",
+        "path": str(path),
+        "width": width,
+        "height": height,
+        "input_color_space": settings["output_color_space"],
+        "white_balance": settings["white_balance"],
+        "temperature": settings["temperature"],
+        "tint": settings["tint"],
+        "lens_correction": settings["lens_correction"],
+        "lens_summary": lens_summary,
+        "lens_applied": bool(lens_summary),
+        "cached": True,
+    }
+
+
+def import_raw_cmd(params: dict) -> dict:
+    """Load one RAW file into the sidecar cache. The pixels stay in-process."""
+    path_text = _optional_path(params.get("path") or params.get("image_path"), field="path")
+    if path_text is None:
+        raise ValueError("path is required")
+    settings = _white_balance_settings(params)
+    file_path = _require_raw_file(path_text)
+    image, lens_summary = load_raw_image(str(file_path), settings)
+    meta = _raw_meta(file_path, image, settings, lens_summary)
+    _remember_raw(_raw_fingerprint(str(file_path), settings), image, meta)
+    return meta
+
+
+def _cached_raw(fingerprint: tuple):
+    if _RAW_CACHE is None or _RAW_CACHE.get("fingerprint") != fingerprint:
+        return None
+    return _RAW_CACHE
+
+
+def _apply_interactive_params(runtime_params, params: dict, *, render_mode: str, max_size: int, exposure: float, input_color_space: str, input_cctf_decoding: bool) -> None:
+    """Copy the shell's controls onto runtime fields that already exist."""
+    runtime_params.settings.preview_mode = render_mode != "scan"
     runtime_params.settings.preview_max_size = max_size
     runtime_params.camera.exposure_compensation_ev = exposure
+    runtime_params.enlarger.y_filter_shift = _clamp_float(
+        params.get("y_filter_shift"), default=0.0, lo=-200.0, hi=200.0
+    )
+    runtime_params.enlarger.m_filter_shift = _clamp_float(
+        params.get("m_filter_shift"), default=0.0, lo=-200.0, hi=200.0
+    )
+    halation = runtime_params.film_render.halation
+    if "halation_active" in params and params.get("halation_active") is not None:
+        halation.active = bool(params["halation_active"])
+    halation.scatter_amount = _clamp_float(params.get("scatter_amount"), default=1.0, lo=0.0, hi=4.0)
+    halation.scatter_spatial_scale = _clamp_float(
+        params.get("scatter_spatial_scale"), default=1.0, lo=0.0, hi=4.0
+    )
+    halation.halation_amount = _clamp_float(params.get("halation_amount"), default=1.0, lo=0.0, hi=4.0)
+    halation.halation_spatial_scale = _clamp_float(
+        params.get("halation_spatial_scale"), default=1.0, lo=0.0, hi=4.0
+    )
     runtime_params.io.input_color_space = input_color_space
     runtime_params.io.input_cctf_decoding = input_cctf_decoding
     runtime_params.io.output_color_space = "sRGB"
     runtime_params.io.output_cctf_encoding = True
 
+
+def run_simulation(image, runtime_params, render_mode: str):
+    """Preview keeps the runtime's fast digest. Scan turns that digest off.
+
+    Both modes still respect ``preview_max_size``. A full-resolution RAW scan
+    is not what this shell requests.
+    """
+    from spektrafilm import simulate, simulate_preview
+
+    if render_mode == "scan":
+        from spektrafilm.utils.preview import resize_for_preview
+
+        sized = resize_for_preview(image, runtime_params.settings.preview_max_size)
+        return simulate(sized, runtime_params)
+    return simulate_preview(image, runtime_params)
+
+
+def _resolve_preview_image(params: dict):
+    requested = params.get("source")
+    image_path = _optional_path(params.get("image_path"), field="image_path")
+    if requested is None:
+        requested = "path" if image_path else "builtin-chart"
+    if requested not in ("builtin-chart", "path", "raw"):
+        raise ValueError("source must be 'builtin-chart', 'path', or 'raw'")
+
+    raw_cache = None
+    lens_summary = None
+    if requested == "raw":
+        if image_path is None:
+            raise ValueError("image_path is required when source is 'raw'")
+        settings = _white_balance_settings(params)
+        file_path = _require_raw_file(image_path)
+        fingerprint = _raw_fingerprint(str(file_path), settings)
+        cached = _cached_raw(fingerprint)
+        if cached is None:
+            image, lens_summary = load_raw_image(str(file_path), settings)
+            meta = _raw_meta(file_path, image, settings, lens_summary)
+            _remember_raw(fingerprint, image, meta)
+            raw_cache = "miss"
+        else:
+            image = cached["image"]
+            lens_summary = cached["meta"].get("lens_summary")
+            raw_cache = "hit"
+        return {
+            "image": image,
+            "source": "raw",
+            "image_path": str(file_path),
+            "input_color_space": settings["output_color_space"],
+            "input_cctf_decoding": False,
+            "raw_cache": raw_cache,
+            "lens_summary": lens_summary,
+            "white_balance": settings["white_balance"],
+        }
+
+    if requested == "path":
+        if image_path is None:
+            raise ValueError("image_path is required when source is 'path'")
+        return {
+            "image": _load_linear_image(image_path),
+            "source": "path",
+            "image_path": image_path,
+            "input_color_space": str(params.get("input_color_space") or "ProPhoto RGB"),
+            "input_cctf_decoding": bool(params.get("input_cctf_decoding") or False),
+            "raw_cache": None,
+            "lens_summary": None,
+            "white_balance": None,
+        }
+
+    return {
+        "image": _builtin_chart(),
+        "source": "builtin-chart",
+        "image_path": None,
+        "input_color_space": "sRGB",
+        "input_cctf_decoding": False,
+        "raw_cache": None,
+        "lens_summary": None,
+        "white_balance": None,
+    }
+
+
+def preview_cmd(params: dict) -> dict:
+    """Run one preview or scan through the existing runtime.
+
+    ``init_params`` plus ``simulate`` / ``simulate_preview`` are the public
+    entry points. ``settings.preview_mode`` is the runtime's own fast path
+    and is on only for ``render_mode: "preview"``.
+    """
+    import time
+
+    render_mode = _render_mode(params)
+    film_profile = str(params.get("film_profile") or "kodak_portra_400")
+    print_profile = str(params.get("print_profile") or "kodak_portra_endura")
+    max_size = _clamp_int(params.get("max_size"), default=64, lo=16, hi=256)
+    exposure = _clamp_float(
+        params.get("exposure_compensation_ev"),
+        default=0.0,
+        lo=-8.0,
+        hi=8.0,
+    )
+    prepared = _resolve_preview_image(params)
+    image = prepared["image"]
+    input_height, input_width = int(image.shape[0]), int(image.shape[1])
+
+    ensure_import_path()
+    from spektrafilm import init_params
+
+    runtime_params = init_params(
+        film_profile=film_profile,
+        print_profile=print_profile,
+    )
+    _apply_interactive_params(
+        runtime_params,
+        params,
+        render_mode=render_mode,
+        max_size=max_size,
+        exposure=exposure,
+        input_color_space=prepared["input_color_space"],
+        input_cctf_decoding=prepared["input_cctf_decoding"],
+    )
+
     started = time.perf_counter()
     with _silence_stdout():
-        result = simulate_preview(image, runtime_params)
+        result = run_simulation(image, runtime_params, render_mode)
     elapsed_ms = int((time.perf_counter() - started) * 1000)
     png, width, height = _result_to_png(result)
+    halation = runtime_params.film_render.halation
     return {
         "film_profile": film_profile,
         "print_profile": print_profile,
-        "source": source,
-        "image_path": image_path,
+        "source": prepared["source"],
+        "image_path": prepared["image_path"],
+        "input_width": input_width,
+        "input_height": input_height,
         "width": width,
         "height": height,
         "mime": "image/png",
         "png_base64": base64.b64encode(png).decode("ascii"),
         "elapsed_ms": elapsed_ms,
-        "preview_mode": True,
+        "render_mode": render_mode,
+        "preview_mode": runtime_params.settings.preview_mode,
         "max_size": max_size,
         "exposure_compensation_ev": exposure,
-        "input_color_space": input_color_space,
+        "y_filter_shift": runtime_params.enlarger.y_filter_shift,
+        "m_filter_shift": runtime_params.enlarger.m_filter_shift,
+        "halation_active": halation.active,
+        "scatter_amount": halation.scatter_amount,
+        "scatter_spatial_scale": halation.scatter_spatial_scale,
+        "halation_amount": halation.halation_amount,
+        "halation_spatial_scale": halation.halation_spatial_scale,
+        "input_color_space": prepared["input_color_space"],
         "output_color_space": "sRGB",
+        "raw_cache": prepared["raw_cache"],
+        "white_balance": prepared["white_balance"],
+        "lens_summary": prepared["lens_summary"],
     }
 
 
@@ -355,6 +591,8 @@ def dispatch(request: dict) -> dict:
             result = version()
         elif method == "list_profiles":
             result = list_profiles_cmd(params)
+        elif method == "import_raw":
+            result = import_raw_cmd(params)
         elif method == "preview":
             result = preview_cmd(params)
         else:
