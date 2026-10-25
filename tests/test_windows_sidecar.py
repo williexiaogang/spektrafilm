@@ -122,6 +122,8 @@ def test_list_profiles_and_builtin_preview_against_runtime():
     assert result["output_color_space"] == "sRGB"
     assert result["preview_mode"] is True
     assert result["render_mode"] == "preview"
+    reference = __import__("base64").b64decode(result["reference_png_base64"])
+    assert reference.startswith(b"\x89PNG\r\n\x1a\n")
 
 
 def test_import_raw_rejects_a_missing_file_and_unknown_white_balance(tmp_path):

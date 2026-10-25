@@ -1,6 +1,6 @@
 /* SpektraFilm Windows edition — GPLv3. See LICENSE in the repository root. */
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type PointerEvent as ReactPointerEvent } from "react";
 import {
   formatErr,
   importRaw,
@@ -19,19 +19,25 @@ import {
   type VersionInfo,
   type WhiteBalance,
 } from "./api";
+import { filmSwatch, GHOST_FILMS, GHOST_PAPERS, paperSwatch } from "./swatches";
 
 const DRAFT_SIZE = 64;
 const FINE_SIZE = 128;
+const INSPECTOR_DEFAULT = 268;
+const INSPECTOR_MIN = 210;
+const INSPECTOR_MAX = 440;
 
 type Phase = "booting" | "ready" | "error" | "offline";
 type SourceMode = "chart" | "file" | "raw";
 type Job = { tone: "idle" | "running" | "ok" | "error"; text: string };
+type Named = { id: string; name: string };
+type KeptFrame = { id: number; result: PreviewResult; key: string };
 
-const WHITE_BALANCE_OPTIONS: { id: WhiteBalance; label: string }[] = [
-  { id: "as_shot", label: "As shot" },
-  { id: "daylight", label: "Daylight" },
-  { id: "tungsten", label: "Tungsten" },
-  { id: "custom", label: "Custom" },
+const WHITE_BALANCE_OPTIONS: { id: WhiteBalance; label: string; title: string }[] = [
+  { id: "as_shot", label: "Shot", title: "As shot — camera white balance" },
+  { id: "daylight", label: "Day", title: "Daylight" },
+  { id: "tungsten", label: "Tung", title: "Tungsten" },
+  { id: "custom", label: "Custom", title: "Custom Kelvin and green-channel tint" },
 ];
 
 export default function App() {
@@ -66,13 +72,15 @@ export default function App() {
   const [runError, setRunError] = useState<string | null>(null);
   const [preview, setPreview] = useState<PreviewResult | null>(null);
   const [developedKey, setDevelopedKey] = useState<string | null>(null);
+  const [frames, setFrames] = useState<KeptFrame[]>([]);
+  const [shownId, setShownId] = useState<number | null>(null);
+  const [comparing, setComparing] = useState(false);
+  const [inspectorWidth, setInspectorWidth] = useState(INSPECTOR_DEFAULT);
 
   useEffect(() => {
     if (!inTauri()) {
       setPhase("offline");
-      setBootError(
-        "This page is the Vite dev server on its own. Start the Tauri shell so it can launch the Python sidecar.",
-      );
+      setBootError("Start the Tauri shell so it can launch the Python sidecar.");
       return;
     }
 
@@ -116,9 +124,10 @@ export default function App() {
     };
   }, []);
 
-  const film = films.find((profile) => profile.id === filmId) ?? null;
   const shellReady = phase === "ready";
   const customBalance = whiteBalance === "custom";
+  const filmTiles: Named[] = films.length > 0 ? films : GHOST_FILMS;
+  const paperTiles: Named[] = papers.length > 0 ? papers : GHOST_PAPERS;
   const settingsKey = useMemo(
     () =>
       JSON.stringify({
@@ -166,6 +175,9 @@ export default function App() {
     ],
   );
   const stale = preview !== null && developedKey !== settingsKey;
+  const canCompare = Boolean(preview?.reference_png_base64);
+  const viewPng =
+    comparing && preview?.reference_png_base64 ? preview.reference_png_base64 : preview?.png_base64;
 
   function simulationParams() {
     return {
@@ -192,6 +204,29 @@ export default function App() {
       tint,
       lens_correction: lensCorrection,
     };
+  }
+
+  function holdCompare(next: boolean) {
+    if (next && !canCompare) {
+      return;
+    }
+    setComparing(next);
+  }
+
+  function resizeInspector(event: ReactPointerEvent<HTMLDivElement>) {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startW = inspectorWidth;
+    const move = (ev: PointerEvent) => {
+      const next = startW - (ev.clientX - startX);
+      setInspectorWidth(Math.min(INSPECTOR_MAX, Math.max(INSPECTOR_MIN, next)));
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
   }
 
   async function openRaw(path: string) {
@@ -247,7 +282,7 @@ export default function App() {
     const filePath = imagePath.trim();
     const cameraPath = rawPath.trim();
     if (sourceMode === "file" && !filePath) {
-      setRunError("Enter a linear image path, or switch back to the chart.");
+      setRunError("Enter a linear image path.");
       setJob({ tone: "error", text: "No linear image path." });
       return;
     }
@@ -258,6 +293,7 @@ export default function App() {
     }
 
     setBusy(true);
+    setComparing(false);
     setRunError(null);
     const requestKey = settingsKey;
     const modeLabel = renderMode === "scan" ? "scan" : "preview";
@@ -272,8 +308,11 @@ export default function App() {
         image_path: sourceMode === "file" ? filePath : sourceMode === "raw" ? cameraPath : null,
         ...(sourceMode === "raw" ? rawParams(cameraPath) : {}),
       });
+      const id = Date.now();
       setPreview(result);
       setDevelopedKey(requestKey);
+      setShownId(id);
+      setFrames((current) => [{ id, result, key: requestKey }, ...current].slice(0, 8));
       if (result.source === "raw") {
         setRawInfo((current) =>
           current && current.path === result.image_path
@@ -309,67 +348,208 @@ export default function App() {
     }
   }
 
+  const lampTitle = [
+    job.text,
+    health?.python ? `Python ${health.python}` : "",
+    version?.spektrafilm ? `spektrafilm ${version.spektrafilm}` : "",
+    health ? `protocol ${health.protocol}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+
   return (
     <div className="app">
       <header className="mast">
         <div className="brand">
           <DyeMark />
           <div>
-            <p className="wordmark">SpektraFilm</p>
-            <p className="edition">Windows edition</p>
+            <p className="wordmark" title="SpektraFilm Windows edition. GNU GPL v3.">
+              SpektraFilm
+            </p>
+            <p className="edition">Windows</p>
           </div>
         </div>
-        <StatusPill phase={phase} job={job} />
+        <div className="mast-tools">
+          <div className="chips" role="group" aria-label="Source">
+            <button
+              type="button"
+              className={sourceMode === "chart" ? "on" : ""}
+              disabled={!shellReady}
+              title="Built-in linear chart, treated as sRGB"
+              onClick={() => setSourceMode("chart")}
+            >
+              Chart
+            </button>
+            <button
+              type="button"
+              className={sourceMode === "file" ? "on" : ""}
+              disabled={!shellReady}
+              title="Scene-referred linear TIFF or EXR"
+              onClick={() => setSourceMode("file")}
+            >
+              File
+            </button>
+            <button
+              type="button"
+              className={sourceMode === "raw" ? "on" : ""}
+              disabled={!shellReady}
+              title="Camera RAW, demosaiced by the sidecar"
+              onClick={() => setSourceMode("raw")}
+            >
+              RAW
+            </button>
+          </div>
+          <button
+            type="button"
+            className="expose"
+            disabled={!shellReady || busy || !filmId || !paperId}
+            title="Develop the current stock, paper, and filters"
+            onClick={() => {
+              void develop();
+            }}
+          >
+            {busy ? "Working" : renderMode === "scan" ? "Scan" : "Expose"}
+          </button>
+          <StatusPill phase={phase} job={job} title={lampTitle} />
+        </div>
       </header>
 
-      <div className="workspace">
-        <aside className="panel left-panel">
-          <section className="station">
-            <h2>Film</h2>
-            <label className="field">
-              <span title="Film stock passed to init_params">Stock</span>
-              <select
-                value={films.some((profile) => profile.id === filmId) ? filmId : ""}
-                disabled={!shellReady || films.length === 0}
-                onChange={(event) => setFilmId(event.target.value)}
-              >
-                {films.length === 0 ? <option value="">No film profiles</option> : null}
-                {films.map((profile) => (
-                  <option key={profile.id} value={profile.id}>
-                    {profile.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <MetaRow label="Type" value={film ? titleCase(film.type) : "—"} />
-            {film?.target_print ? (
-              <p className="hint">Target print {labelFor(papers, film.target_print)}</p>
-            ) : null}
-          </section>
+      <StockStrip
+        label="Film"
+        kind="film"
+        profiles={filmTiles}
+        selected={filmId}
+        disabled={!shellReady}
+        onSelect={setFilmId}
+      />
+      <StockStrip
+        label="Paper"
+        kind="paper"
+        profiles={paperTiles}
+        selected={paperId}
+        disabled={!shellReady}
+        onSelect={setPaperId}
+      />
 
-          <section className="station">
-            <h2>Print</h2>
-            <label className="field">
-              <span title="Print paper passed to init_params">Paper</span>
-              <select
-                value={papers.some((profile) => profile.id === paperId) ? paperId : ""}
-                disabled={!shellReady || papers.length === 0}
-                onChange={(event) => setPaperId(event.target.value)}
-              >
-                {papers.length === 0 ? <option value="">No print profiles</option> : null}
-                {papers.map((profile) => (
-                  <option key={profile.id} value={profile.id}>
-                    {profile.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </section>
+      <div
+        className="workspace"
+        style={{ ["--inspector" as string]: `${inspectorWidth}px` }}
+      >
+        <main className="stage">
+          <div
+            className={`frame ${busy ? "busy" : ""} ${preview ? "holding" : ""} ${comparing ? "comparing" : ""}`}
+            onPointerDown={() => holdCompare(true)}
+            onPointerUp={() => holdCompare(false)}
+            onPointerLeave={() => holdCompare(false)}
+            onPointerCancel={() => holdCompare(false)}
+          >
+            <div className="marks" aria-hidden="true">
+              <i />
+              <i />
+              <i />
+              <i />
+            </div>
+            {preview && viewPng ? (
+              <img
+                alt={comparing ? "Scene before development" : "Developed preview"}
+                src={`data:${preview.mime};base64,${viewPng}`}
+                style={{ imageRendering: preview.width < 200 ? "pixelated" : "auto" }}
+              />
+            ) : (
+              <EmptyStage />
+            )}
+            {busy ? <div className="sweep" /> : null}
+            {comparing ? <span className="compare-tag">Original</span> : null}
+            <p className="rebate">
+              <span className="rebate-id">SF</span>
+              <span className="name">{captionFor(preview, sourceMode, rawPath, imagePath)}</span>
+              {stale ? (
+                <span className="stale" title="The easel does not match the controls">
+                  Stale
+                </span>
+              ) : null}
+              {canCompare ? (
+                <button
+                  type="button"
+                  className={`hold ${comparing ? "on" : ""}`}
+                  title="Hold to compare the scene before development"
+                  onPointerDown={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    holdCompare(true);
+                  }}
+                  onPointerUp={(event) => {
+                    event.stopPropagation();
+                    holdCompare(false);
+                  }}
+                  onPointerLeave={() => holdCompare(false)}
+                  onPointerCancel={() => holdCompare(false)}
+                >
+                  Hold
+                </button>
+              ) : null}
+            </p>
+          </div>
+          {frames.length > 0 ? (
+            <div className="roll" role="list" aria-label="Recent frames">
+              {frames.map((frame) => (
+                <button
+                  key={frame.id}
+                  type="button"
+                  className={frame.id === shownId ? "on" : ""}
+                  title={`${labelFor(filmTiles, frame.result.film_profile)} · ${labelFor(paperTiles, frame.result.print_profile)}`}
+                  onClick={() => {
+                    setShownId(frame.id);
+                    setPreview(frame.result);
+                    setDevelopedKey(frame.key);
+                    setComparing(false);
+                  }}
+                >
+                  <img alt="" src={`data:${frame.result.mime};base64,${frame.result.png_base64}`} />
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </main>
 
-          <section className="station">
-            <h2>Exposure</h2>
+        <div
+          className="handle"
+          role="separator"
+          aria-orientation="vertical"
+          aria-valuemin={INSPECTOR_MIN}
+          aria-valuemax={INSPECTOR_MAX}
+          aria-valuenow={inspectorWidth}
+          aria-label="Inspector width"
+          tabIndex={0}
+          title="Drag to resize. Double-click restores."
+          onPointerDown={resizeInspector}
+          onDoubleClick={() => setInspectorWidth(INSPECTOR_DEFAULT)}
+          onKeyDown={(event) => {
+            if (event.key === "ArrowLeft") {
+              setInspectorWidth((width) => Math.min(INSPECTOR_MAX, width + 16));
+            } else if (event.key === "ArrowRight") {
+              setInspectorWidth((width) => Math.max(INSPECTOR_MIN, width - 16));
+            } else if (event.key === "Home") {
+              setInspectorWidth(INSPECTOR_DEFAULT);
+            }
+          }}
+        />
+
+        <aside className="inspector">
+          <p className={`readout ${job.tone}`} title={job.text}>
+            {preview
+              ? `${preview.width}×${preview.height} · ${(preview.elapsed_ms / 1000).toFixed(1)} s`
+              : job.tone === "idle"
+                ? "No print"
+                : job.text}
+          </p>
+          {runError ? <p className="error">{runError}</p> : null}
+          {bootError && phase !== "ready" ? <p className="error">{bootError}</p> : null}
+
+          <section>
+            <h2 title="camera.exposure_compensation_ev">Exposure</h2>
             <Slider
-              label="Compensation"
+              label="EV"
               title="Bias added to the virtual camera auto-exposure, in stops"
               min={-3}
               max={3}
@@ -381,10 +561,10 @@ export default function App() {
             />
           </section>
 
-          <section className="station">
-            <h2>Enlarger</h2>
+          <section>
+            <h2 title="enlarger.y_filter_shift and enlarger.m_filter_shift">Filters</h2>
             <Slider
-              label="Yellow filter"
+              label="Yellow"
               title="enlarger.y_filter_shift, Kodak CC steps from neutral"
               tone="yellow"
               min={-80}
@@ -396,7 +576,7 @@ export default function App() {
               onChange={setYShift}
             />
             <Slider
-              label="Magenta filter"
+              label="Magenta"
               title="enlarger.m_filter_shift, Kodak CC steps from neutral"
               tone="magenta"
               min={-80}
@@ -409,17 +589,19 @@ export default function App() {
             />
           </section>
 
-          <section className="station">
-            <h2>Halation</h2>
-            <label className="check" title="film_render.halation.active">
-              <input
-                type="checkbox"
-                checked={halationActive}
+          <section>
+            <h2 title="film_render.halation">Halation</h2>
+            <div className="chips" role="group" aria-label="Halation">
+              <button
+                type="button"
+                className={halationActive ? "on" : ""}
                 disabled={!shellReady}
-                onChange={(event) => setHalationActive(event.target.checked)}
-              />
-              Active
-            </label>
+                title="film_render.halation.active"
+                onClick={() => setHalationActive((active) => !active)}
+              >
+                {halationActive ? "On" : "Off"}
+              </button>
+            </div>
             <Slider
               label="Scatter"
               title="film_render.halation.scatter_amount. 1 matches the stock model."
@@ -433,7 +615,7 @@ export default function App() {
               onChange={setScatterAmount}
             />
             <Slider
-              label="Scatter size"
+              label="Size"
               title="film_render.halation.scatter_spatial_scale"
               tone="heat"
               min={0}
@@ -445,7 +627,7 @@ export default function App() {
               onChange={setScatterSize}
             />
             <Slider
-              label="Halation"
+              label="Halo"
               title="film_render.halation.halation_amount"
               tone="heat"
               min={0}
@@ -457,7 +639,7 @@ export default function App() {
               onChange={setHalationAmount}
             />
             <Slider
-              label="Halation size"
+              label="Reach"
               title="film_render.halation.halation_spatial_scale"
               tone="heat"
               min={0}
@@ -470,9 +652,9 @@ export default function App() {
             />
           </section>
 
-          <section className="station">
-            <h2>Develop</h2>
-            <div className="segmented" role="group" aria-label="Render mode">
+          <section>
+            <h2 title="settings.preview_mode. Scan still resizes to the long edge below.">Gate</h2>
+            <div className="chips" role="group" aria-label="Render mode">
               <button
                 type="button"
                 className={renderMode === "preview" ? "on" : ""}
@@ -480,272 +662,200 @@ export default function App() {
                 title="settings.preview_mode on. Grain and several blurs are skipped."
                 onClick={() => setRenderMode("preview")}
               >
+                <EyeIcon />
                 Preview
               </button>
               <button
                 type="button"
                 className={renderMode === "scan" ? "on" : ""}
                 disabled={!shellReady}
-                title="settings.preview_mode off, still limited to the size below."
+                title="settings.preview_mode off. Still limited to the long edge below."
                 onClick={() => setRenderMode("scan")}
               >
+                <ScanIcon />
                 Scan
               </button>
             </div>
-            <div className="segmented" role="group" aria-label="Preview size">
+            <div className="chips" role="group" aria-label="Long edge">
               <button
                 type="button"
                 className={maxSize === DRAFT_SIZE ? "on" : ""}
                 disabled={!shellReady}
+                title={`settings.preview_max_size ${DRAFT_SIZE}`}
                 onClick={() => setMaxSize(DRAFT_SIZE)}
               >
-                Draft {DRAFT_SIZE}
+                {DRAFT_SIZE}
               </button>
               <button
                 type="button"
                 className={maxSize === FINE_SIZE ? "on" : ""}
                 disabled={!shellReady}
+                title={`settings.preview_max_size ${FINE_SIZE}`}
                 onClick={() => setMaxSize(FINE_SIZE)}
               >
-                Fine {FINE_SIZE}
+                {FINE_SIZE}
               </button>
             </div>
-            <p className="hint">Scan keeps grain and blur. Both modes resize to this long edge.</p>
           </section>
 
-          <section className="station">
-            <h2>Source</h2>
-            <div className="segmented three" role="group" aria-label="Preview source">
-              <button
-                type="button"
-                className={sourceMode === "chart" ? "on" : ""}
-                disabled={!shellReady}
-                onClick={() => setSourceMode("chart")}
-              >
-                Chart
-              </button>
-              <button
-                type="button"
-                className={sourceMode === "file" ? "on" : ""}
-                disabled={!shellReady}
-                onClick={() => setSourceMode("file")}
-              >
-                File
-              </button>
-              <button
-                type="button"
-                className={sourceMode === "raw" ? "on" : ""}
-                disabled={!shellReady}
-                onClick={() => setSourceMode("raw")}
-              >
-                RAW
-              </button>
-            </div>
-            {sourceMode === "file" ? (
+          {sourceMode === "file" ? (
+            <section>
+              <h2 title="load_image_oiio">File</h2>
               <label className="field">
-                <span title="Scene-referred linear TIFF or EXR, read by load_image_oiio">Linear image path</span>
+                <span>Path</span>
                 <input
                   type="text"
                   value={imagePath}
                   disabled={!shellReady}
-                  placeholder="C:\photos\scene_linear.tif"
-                  onChange={(event) => setImagePath(event.target.value)}
+                  placeholder="scene_linear.tif"
                   spellCheck={false}
+                  onChange={(event) => setImagePath(event.target.value)}
                 />
               </label>
-            ) : null}
-            {sourceMode === "chart" ? <p className="hint">Built-in linear chart, treated as sRGB.</p> : null}
-            {sourceMode === "raw" ? (
-              <>
-                <label className="field">
-                  <span title="Same modes as the Qt importer: as shot, daylight, tungsten, custom">White balance</span>
-                  <select
-                    value={whiteBalance}
-                    disabled={!shellReady}
-                    onChange={(event) => setWhiteBalance(event.target.value as WhiteBalance)}
-                  >
-                    {WHITE_BALANCE_OPTIONS.map((option) => (
-                      <option key={option.id} value={option.id}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <Slider
-                  label="Temperature"
-                  title="Kelvin. Used only for custom white balance."
-                  tone="kelvin"
-                  min={2500}
-                  max={9000}
-                  step={50}
-                  value={temperature}
-                  disabled={!shellReady || !customBalance}
-                  display={`${Math.round(temperature)} K`}
-                  onChange={setTemperature}
-                />
-                <Slider
-                  label="Tint"
-                  title="Green-channel multiplier. 1 is neutral. Used only for custom white balance."
-                  tone="magenta"
-                  min={0.7}
-                  max={1.3}
-                  step={0.01}
-                  value={tint}
-                  disabled={!shellReady || !customBalance}
-                  display={tint.toFixed(2)}
-                  onChange={setTint}
-                />
-                <label className="check" title="lensfun correction during RAW import">
-                  <input
-                    type="checkbox"
-                    checked={lensCorrection}
-                    disabled={!shellReady}
-                    onChange={(event) => setLensCorrection(event.target.checked)}
-                  />
-                  Lens correction
-                </label>
-                <label className="field">
-                  <span>RAW path</span>
-                  <input
-                    type="text"
-                    value={rawPath}
-                    disabled={!shellReady}
-                    placeholder="C:\photos\frame.nef"
-                    spellCheck={false}
-                    onChange={(event) => setRawPath(event.target.value)}
-                  />
-                </label>
-                <div className="button-row">
-                  <button type="button" className="secondary" disabled={!shellReady || busy} onClick={() => void browseRaw()}>
-                    Browse
-                  </button>
+            </section>
+          ) : null}
+
+          {sourceMode === "raw" ? (
+            <section>
+              <h2
+                title={
+                  rawInfo
+                    ? `${rawInfo.width}×${rawInfo.height} · ${rawInfo.input_color_space}${rawInfo.lens_summary ? ` · ${rawInfo.lens_summary}` : ""}`
+                    : "rawpy import"
+                }
+              >
+                RAW
+              </h2>
+              <div className="chips wrap" role="group" aria-label="White balance">
+                {WHITE_BALANCE_OPTIONS.map((option) => (
                   <button
+                    key={option.id}
                     type="button"
-                    className="secondary"
-                    disabled={!shellReady || busy || !rawPath.trim()}
-                    title="Demosaic again with the current white balance"
-                    onClick={() => void openRaw(rawPath.trim())}
+                    className={whiteBalance === option.id ? "on" : ""}
+                    disabled={!shellReady}
+                    title={option.title}
+                    onClick={() => setWhiteBalance(option.id)}
                   >
-                    Reprocess
+                    {option.label}
                   </button>
-                </div>
-              </>
-            ) : null}
-          </section>
-
-          <div className="develop">
-            <button
-              type="button"
-              className="primary"
-              disabled={!shellReady || busy || !filmId || !paperId}
-              onClick={() => {
-                void develop();
-              }}
-            >
-              {busy ? "Working…" : renderMode === "scan" ? "Develop scan" : "Develop preview"}
-            </button>
-            {runError ? <p className="error">{runError}</p> : null}
-            {bootError && phase !== "ready" ? <p className="error">{bootError}</p> : null}
-          </div>
-        </aside>
-
-        <main className="stage">
-          <div className={`frame ${busy ? "busy" : ""} ${preview ? "holding" : ""}`}>
-            <div className="marks" aria-hidden="true">
-              <i />
-              <i />
-              <i />
-              <i />
-            </div>
-            {preview ? (
-              <img
-                alt="Simulation preview"
-                src={`data:${preview.mime};base64,${preview.png_base64}`}
-                style={{ imageRendering: preview.width < 200 ? "pixelated" : "auto" }}
+                ))}
+                <button
+                  type="button"
+                  className={lensCorrection ? "on" : ""}
+                  disabled={!shellReady}
+                  title="lensfun correction during RAW import"
+                  onClick={() => setLensCorrection((enabled) => !enabled)}
+                >
+                  Lens
+                </button>
+              </div>
+              <Slider
+                label="Kelvin"
+                title="Used only for custom white balance"
+                tone="kelvin"
+                min={2500}
+                max={9000}
+                step={50}
+                value={temperature}
+                disabled={!shellReady || !customBalance}
+                display={`${Math.round(temperature)} K`}
+                onChange={setTemperature}
               />
-            ) : (
-              <EmptyStage />
-            )}
-            {busy ? <div className="sweep" /> : null}
-          </div>
-          <p className="rebate">
-            <span className="rebate-id">SF</span>
-            <span className="name">{captionFor(preview, sourceMode, rawPath, imagePath)}</span>
-            {stale ? <span className="stale">Settings changed</span> : null}
-          </p>
-        </main>
-
-        <aside className="panel right-panel">
-          <section className="log">
-            <h2>Status</h2>
-            <p className={`job ${job.tone}`}>{job.text}</p>
-            <MetaRow label="Mode" value={preview ? titleCase(preview.render_mode) : titleCase(renderMode)} />
-            <MetaRow
-              label="Size"
-              value={preview ? `${preview.width} × ${preview.height}` : "—"}
-            />
-            <MetaRow
-              label="Time"
-              value={preview ? `${(preview.elapsed_ms / 1000).toFixed(1)} s` : "—"}
-            />
-          </section>
-
-          <section className="log">
-            <h2>RAW</h2>
-            <MetaRow label="File" value={fileName(rawInfo?.path ?? (sourceMode === "raw" ? rawPath : ""))} />
-            <MetaRow
-              label="Frame"
-              value={rawInfo ? `${rawInfo.width} × ${rawInfo.height}` : "—"}
-            />
-            <MetaRow label="Balance" value={rawInfo ? titleCase(rawInfo.white_balance) : titleCase(whiteBalance)} />
-            <MetaRow label="Lens" value={rawInfo?.lens_summary ?? "—"} />
-            <MetaRow label="Input" value={rawInfo?.input_color_space ?? "—"} />
-          </section>
-
-          <section className="log">
-            <h2>Preview</h2>
-            <MetaRow label="Film" value={nameFor(films, preview?.film_profile)} />
-            <MetaRow label="Paper" value={nameFor(papers, preview?.print_profile)} />
-            <MetaRow
-              label="Exposure"
-              value={preview ? formatEv(preview.exposure_compensation_ev) : formatEv(exposure)}
-            />
-            <MetaRow
-              label="Y / M"
-              value={
-                preview
-                  ? `${signed(preview.y_filter_shift, 0)} / ${signed(preview.m_filter_shift, 0)}`
-                  : `${signed(yShift, 0)} / ${signed(mShift, 0)}`
-              }
-            />
-            <MetaRow label="Output" value={preview?.output_color_space ?? "sRGB"} />
-          </section>
-
-          <section className="log">
-            <h2>Sidecar</h2>
-            <MetaRow label="Status" value={phaseLabel(phase)} />
-            <MetaRow label="Python" value={health?.python ?? version?.python ?? "—"} />
-            <MetaRow label="Runtime" value={version?.spektrafilm ?? "—"} />
-            <MetaRow label="Protocol" value={health ? String(health.protocol) : "—"} />
-          </section>
-
-          <p className="legal">
-            Simulation stays in <code>src/spektrafilm</code>. RAW import uses the same rawpy helper
-            as the Qt GUI. This application is free software under the GNU GPL v3.
-          </p>
+              <Slider
+                label="Tint"
+                title="Green-channel multiplier. 1 is neutral. Used only for custom white balance."
+                tone="magenta"
+                min={0.7}
+                max={1.3}
+                step={0.01}
+                value={tint}
+                disabled={!shellReady || !customBalance}
+                display={tint.toFixed(2)}
+                onChange={setTint}
+              />
+              <label className="field">
+                <span>Path</span>
+                <input
+                  type="text"
+                  value={rawPath}
+                  disabled={!shellReady}
+                  placeholder="frame.nef"
+                  spellCheck={false}
+                  onChange={(event) => setRawPath(event.target.value)}
+                />
+              </label>
+              <div className="button-row">
+                <button type="button" className="secondary" disabled={!shellReady || busy} onClick={() => void browseRaw()}>
+                  Browse
+                </button>
+                <button
+                  type="button"
+                  className="secondary"
+                  disabled={!shellReady || busy || !rawPath.trim()}
+                  title="Demosaic again with the current white balance"
+                  onClick={() => void openRaw(rawPath.trim())}
+                >
+                  Reload
+                </button>
+              </div>
+            </section>
+          ) : null}
         </aside>
       </div>
     </div>
   );
 }
 
-function StatusPill({ phase, job }: { phase: Phase; job: Job }) {
+function StockStrip({
+  label,
+  kind,
+  profiles,
+  selected,
+  disabled,
+  onSelect,
+}: {
+  label: string;
+  kind: "film" | "paper";
+  profiles: Named[];
+  selected: string;
+  disabled: boolean;
+  onSelect: (id: string) => void;
+}) {
+  return (
+    <div className={`strip ${kind}`} role="group" aria-label={label}>
+      <span className="strip-label">{label}</span>
+      <div className="strip-scroll">
+        {profiles.map((profile) => (
+          <button
+            key={profile.id}
+            type="button"
+            className={`tile ${selected === profile.id ? "on" : ""}`}
+            disabled={disabled}
+            title={profile.name}
+            aria-pressed={selected === profile.id}
+            onClick={() => onSelect(profile.id)}
+          >
+            <span
+              className="swatch"
+              style={{ background: kind === "film" ? filmSwatch(profile.id) : paperSwatch(profile.id) }}
+            >
+              {kind === "film" ? <i className="chartlet" aria-hidden="true" /> : null}
+            </span>
+            <span className="cap">{shortStock(profile.name)}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function StatusPill({ phase, job, title }: { phase: Phase; job: Job; title: string }) {
   const tone = job.tone === "running" ? "booting" : job.tone === "error" ? "error" : phase;
   const label = job.tone === "running" || job.tone === "error" ? job.text : phaseLabel(phase);
   return (
-    <p className={`lamp ${tone}`} title={job.text}>
+    <p className={`lamp ${tone}`} title={title}>
       <i aria-hidden="true" />
-      <span>{label.length > 42 ? `${label.slice(0, 40)}…` : label}</span>
+      <span>{label.length > 28 ? `${label.slice(0, 26)}…` : label}</span>
     </p>
   );
 }
@@ -762,12 +872,28 @@ function DyeMark() {
   );
 }
 
-function MetaRow({ label, value }: { label: string; value: string }) {
+function EyeIcon() {
   return (
-    <p className="meta">
-      <span>{label}</span>
-      <strong title={value}>{value}</strong>
-    </p>
+    <svg className="chip-icon" viewBox="0 0 16 16" aria-hidden="true">
+      <path
+        d="M1.5 8 C4 4.2 12 4.2 14.5 8 C12 11.8 4 11.8 1.5 8 Z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.2"
+      />
+      <circle cx="8" cy="8" r="1.6" fill="currentColor" />
+    </svg>
+  );
+}
+
+function ScanIcon() {
+  return (
+    <svg className="chip-icon" viewBox="0 0 16 16" aria-hidden="true">
+      <rect x="2" y="2" width="5" height="5" fill="currentColor" />
+      <rect x="9" y="2" width="5" height="5" fill="currentColor" opacity="0.45" />
+      <rect x="2" y="9" width="5" height="5" fill="currentColor" opacity="0.45" />
+      <rect x="9" y="9" width="5" height="5" fill="currentColor" />
+    </svg>
   );
 }
 
@@ -824,15 +950,8 @@ function EmptyStage() {
   return (
     <div className="empty">
       <svg className="gate-drawing" viewBox="0 0 240 140" aria-hidden="true">
-        <rect x="8" y="16" width="224" height="108" fill="#16130f" stroke="#3a322a" />
-        {Array.from({ length: 8 }, (_, index) => (
-          <rect key={`t${index}`} x={22 + index * 26} y="6" width="10" height="8" rx="1" fill="#2a241c" />
-        ))}
-        {Array.from({ length: 8 }, (_, index) => (
-          <rect key={`b${index}`} x={22 + index * 26} y="126" width="10" height="8" rx="1" fill="#2a241c" />
-        ))}
-        <rect x="36" y="32" width="168" height="76" fill="#0c0b09" stroke="#5c5348" />
-        <rect x="188" y="32" width="16" height="76" fill="url(#fog)" />
+        <rect x="18" y="22" width="204" height="96" fill="#0c0b09" stroke="#5c5348" />
+        <rect x="196" y="22" width="26" height="96" fill="url(#fog)" />
         <defs>
           <linearGradient id="fog" x1="0" x2="1">
             <stop offset="0" stopColor="#6fafa8" stopOpacity="0" />
@@ -842,8 +961,7 @@ function EmptyStage() {
           </linearGradient>
         </defs>
       </svg>
-      <p>The easel is clear</p>
-      <span>Expose the chart, a linear file, or a camera RAW.</span>
+      <p>Easel clear</p>
     </div>
   );
 }
@@ -851,11 +969,11 @@ function EmptyStage() {
 function phaseLabel(phase: Phase): string {
   switch (phase) {
     case "booting":
-      return "Starting sidecar";
+      return "Starting";
     case "ready":
-      return "Sidecar ready";
+      return "Ready";
     case "offline":
-      return "Shell offline";
+      return "Offline";
     case "error":
       return "Sidecar error";
   }
@@ -864,7 +982,7 @@ function phaseLabel(phase: Phase): string {
 function formatEv(value: number): string {
   const rounded = Math.round(value * 10) / 10;
   const text = rounded.toFixed(1);
-  return rounded > 0 ? `+${text} EV` : `${text} EV`;
+  return rounded > 0 ? `+${text}` : text;
 }
 
 function signed(value: number, digits: number): string {
@@ -872,19 +990,17 @@ function signed(value: number, digits: number): string {
   return value > 0 ? `+${text}` : text;
 }
 
-function titleCase(value: string): string {
-  return value.replace(/[_-]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+function shortStock(name: string): string {
+  return name
+    .replace(/^Kodak Professional\s+/i, "")
+    .replace(/^Kodak\s+/i, "")
+    .replace(/^Fujifilm\s+/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
-function labelFor(profiles: Profile[], id: string): string {
+function labelFor(profiles: Named[], id: string): string {
   return profiles.find((profile) => profile.id === id)?.name ?? id;
-}
-
-function nameFor(profiles: Profile[], id: string | undefined): string {
-  if (!id) {
-    return "—";
-  }
-  return labelFor(profiles, id);
 }
 
 function fileName(path: string): string {
@@ -906,10 +1022,10 @@ function captionFor(
     return fileName(preview.image_path ?? rawPath);
   }
   if (preview?.source === "path") {
-    return preview.image_path ?? "Linear file";
+    return fileName(preview.image_path ?? imagePath);
   }
   if (preview) {
-    return "Built-in color chart";
+    return "Color chart";
   }
   if (sourceMode === "raw" && rawPath.trim()) {
     return fileName(rawPath);
@@ -917,5 +1033,5 @@ function captionFor(
   if (sourceMode === "file" && imagePath.trim()) {
     return fileName(imagePath);
   }
-  return "No preview yet";
+  return "No print";
 }

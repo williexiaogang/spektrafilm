@@ -255,6 +255,8 @@ expectation as the Qt file loader.
 
 `raw_cache` is `hit`, `miss`, or `null` (not a RAW source).
 
+`reference_png_base64` is the same frame before simulation, resized to `max_size` and given a plain 2.2 gamma so the shell can hold-to-compare. It is not a second print. It is `null` if that view could not be encoded.
+
 The first preview can take a while: Numba compiles on first use, and the
 spectral pipeline is per pixel. Keep `max_size` small. RAW demosaic is a
 separate cost and happens on import or on a cache miss.

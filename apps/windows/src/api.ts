@@ -61,6 +61,7 @@ export type PreviewResult = {
   height: number;
   mime: string;
   png_base64: string;
+  reference_png_base64: string | null;
   elapsed_ms: number;
   render_mode: RenderMode;
   preview_mode: boolean;

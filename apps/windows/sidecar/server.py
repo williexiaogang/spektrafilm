@@ -493,6 +493,24 @@ def _resolve_preview_image(params: dict):
     }
 
 
+def _reference_png(image, max_size: int) -> str | None:
+    """A small viewable PNG of the scene, for hold-to-compare in the shell.
+
+    The buffer is still linear. This applies a plain 2.2 display gamma so the
+    gate is visible. It is not a second simulation.
+    """
+    try:
+        import numpy as np
+        from spektrafilm.utils.preview import resize_for_preview
+
+        sized = resize_for_preview(np.asarray(image), max_size)
+        viewed = np.power(np.clip(np.asarray(sized, dtype=np.float64), 0.0, 1.0), 1.0 / 2.2)
+        png, _, _ = _result_to_png(viewed)
+    except Exception:
+        return None
+    return base64.b64encode(png).decode("ascii")
+
+
 def preview_cmd(params: dict) -> dict:
     """Run one preview or scan through the existing runtime.
 
@@ -533,6 +551,7 @@ def preview_cmd(params: dict) -> dict:
         input_cctf_decoding=prepared["input_cctf_decoding"],
     )
 
+    reference_png = _reference_png(image, max_size)
     started = time.perf_counter()
     with _silence_stdout():
         result = run_simulation(image, runtime_params, render_mode)
@@ -550,6 +569,7 @@ def preview_cmd(params: dict) -> dict:
         "height": height,
         "mime": "image/png",
         "png_base64": base64.b64encode(png).decode("ascii"),
+        "reference_png_base64": reference_png,
         "elapsed_ms": elapsed_ms,
         "render_mode": render_mode,
         "preview_mode": runtime_params.settings.preview_mode,
