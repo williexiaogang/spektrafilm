@@ -220,6 +220,7 @@ def _builtin_chart():
 
 
 def _load_linear_image(path: str):
+    ensure_import_path()
     from spektrafilm.utils.io import load_image_oiio
 
     file_path = Path(path).expanduser()
@@ -495,18 +496,27 @@ def _resolve_preview_image(params: dict):
     }
 
 
-def _reference_png(image, max_size: int) -> str | None:
+def _reference_png(
+    image, max_size: int, *, input_color_space: str = "sRGB", input_cctf_decoding: bool = False
+) -> str | None:
     """A small viewable PNG of the scene, for hold-to-compare in the shell.
 
-    The buffer is still linear. This applies a plain 2.2 display gamma so the
-    gate is visible. It is not a second simulation.
+    Convert the source primaries/white point and transfer function to encoded
+    sRGB, just like the developed PNG. It is not a second simulation.
     """
     try:
         import numpy as np
+        from colour import RGB_to_RGB
         from spektrafilm.utils.preview import resize_for_preview
 
         sized = resize_for_preview(np.asarray(image), max_size)
-        viewed = np.power(np.clip(np.asarray(sized, dtype=np.float64), 0.0, 1.0), 1.0 / 2.2)
+        viewed = RGB_to_RGB(
+            np.asarray(sized, dtype=np.float64),
+            input_color_space,
+            "sRGB",
+            apply_cctf_decoding=input_cctf_decoding,
+            apply_cctf_encoding=True,
+        )
         png, _, _ = _result_to_png(viewed)
     except Exception:
         return None
@@ -616,7 +626,7 @@ def preview_cmd(params: dict) -> dict:
     render_mode = _render_mode(params)
     film_profile = str(params.get("film_profile") or "kodak_portra_400")
     print_profile = str(params.get("print_profile") or "kodak_portra_endura")
-    max_size = _clamp_int(params.get("max_size"), default=64, lo=16, hi=256)
+    max_size = _clamp_int(params.get("max_size"), default=512, lo=16, hi=2048)
     exposure = _clamp_float(
         params.get("exposure_compensation_ev"),
         default=0.0,
@@ -644,7 +654,11 @@ def preview_cmd(params: dict) -> dict:
         input_cctf_decoding=prepared["input_cctf_decoding"],
     )
 
-    reference_png = _reference_png(image, max_size)
+    reference_png = _reference_png(
+        image, max_size,
+        input_color_space=prepared["input_color_space"],
+        input_cctf_decoding=prepared["input_cctf_decoding"],
+    )
     started = time.perf_counter()
     with _silence_stdout():
         result = run_simulation(image, runtime_params, render_mode)

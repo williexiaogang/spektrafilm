@@ -6,48 +6,48 @@
 mod sidecar;
 
 use serde_json::{json, Value};
-use tauri::{Manager, RunEvent, State};
+use tauri::{AppHandle, Manager, RunEvent};
 
 use sidecar::SidecarState;
 
 #[tauri::command]
-fn sidecar_health(state: State<SidecarState>) -> Result<Value, String> {
-    state.call("health", json!({}))
+async fn sidecar_health(app: AppHandle) -> Result<Value, String> {
+    sidecar::call(app, "health", json!({})).await
 }
 
 #[tauri::command]
-fn sidecar_version(state: State<SidecarState>) -> Result<Value, String> {
-    state.call("version", json!({}))
+async fn sidecar_version(app: AppHandle) -> Result<Value, String> {
+    sidecar::call(app, "version", json!({})).await
 }
 
 #[tauri::command]
-fn list_film_profiles(state: State<SidecarState>) -> Result<Value, String> {
-    state.call("list_profiles", json!({ "kind": "film" }))
+async fn list_film_profiles(app: AppHandle) -> Result<Value, String> {
+    sidecar::call(app, "list_profiles", json!({ "kind": "film" })).await
 }
 
 #[tauri::command]
-fn list_print_profiles(state: State<SidecarState>) -> Result<Value, String> {
-    state.call("list_profiles", json!({ "kind": "print" }))
+async fn list_print_profiles(app: AppHandle) -> Result<Value, String> {
+    sidecar::call(app, "list_profiles", json!({ "kind": "print" })).await
 }
 
 #[tauri::command]
-fn run_preview(state: State<SidecarState>, params: Value) -> Result<Value, String> {
-    state.call("preview", params)
+async fn run_preview(app: AppHandle, params: Value) -> Result<Value, String> {
+    sidecar::call(app, "preview", params).await
 }
 
 #[tauri::command]
-fn stock_thumb(state: State<SidecarState>, params: Value) -> Result<Value, String> {
-    state.call("stock_thumb", params)
+async fn stock_thumb(app: AppHandle, params: Value) -> Result<Value, String> {
+    sidecar::call(app, "stock_thumb", params).await
 }
 
 #[tauri::command]
-fn preview_thumbnails(state: State<SidecarState>, params: Value) -> Result<Value, String> {
-    state.call("preview_thumbnails", params)
+async fn preview_thumbnails(app: AppHandle, params: Value) -> Result<Value, String> {
+    sidecar::call(app, "preview_thumbnails", params).await
 }
 
 #[tauri::command]
-fn import_raw(state: State<SidecarState>, params: Value) -> Result<Value, String> {
-    state.call("import_raw", params)
+async fn import_raw(app: AppHandle, params: Value) -> Result<Value, String> {
+    sidecar::call(app, "import_raw", params).await
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -55,12 +55,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            let started = sidecar::locate_script(app.handle())
-                .and_then(|script| sidecar::Sidecar::spawn(&script));
-            if let Err(err) = &started {
-                eprintln!("[sidecar] {err}");
-            }
-            app.manage(SidecarState(std::sync::Mutex::new(started)));
+            app.manage(SidecarState::new(sidecar::locate_script(app.handle())));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -78,11 +73,7 @@ pub fn run() {
         .run(|app, event| {
             if matches!(event, RunEvent::Exit) {
                 if let Some(state) = app.try_state::<SidecarState>() {
-                    if let Ok(mut guard) = state.0.lock() {
-                        if let Ok(sidecar) = guard.as_mut() {
-                            sidecar.shutdown();
-                        }
-                    }
+                    state.shutdown();
                 }
             }
         });

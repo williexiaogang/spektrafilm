@@ -1,6 +1,14 @@
 /* SpektraFilm Windows edition — GPLv3. See LICENSE in the repository root.
    Newsreader and IBM Plex Mono are SIL OFL 1.1. See src/fonts/OFL.txt. */
 
+@import "tailwindcss";
+
+@plugin "daisyui" {
+  themes: false;
+  include: button, select;
+  logs: false;
+}
+
 @font-face {
   font-family: "Newsreader";
   src: url("./fonts/newsreader-400.woff2") format("woff2");
@@ -43,6 +51,17 @@
   --brass-ink: #2a1c0c;
   --ok: #c5d4a2;
   --bad: #e7a090;
+  --color-base-100: var(--inset);
+  --color-base-200: var(--bench);
+  --color-base-300: var(--plate);
+  --color-base-content: var(--text);
+  --color-primary: var(--dye-y);
+  --color-primary-content: var(--brass-ink);
+  --radius-field: 2px;
+  --size-field: 0.25rem;
+  --border: 1px;
+  --depth: 0;
+  --noise: 0;
   --serif: "Newsreader", "Iowan Old Style", Palatino, Georgia, serif;
   --sans: "Segoe UI Variable", "Segoe UI", "Avenir Next", sans-serif;
   --mono: "IBM Plex Mono", "Cascadia Code", Consolas, ui-monospace, monospace;
@@ -230,6 +249,33 @@ input:focus-visible {
   font-size: 9px;
   letter-spacing: 0.14em;
   text-transform: uppercase;
+}
+
+.strip-heading {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.thumb-retry {
+  min-height: 24px;
+  height: 24px;
+  padding-inline: 3px;
+  font-family: var(--mono);
+  font-size: 9px;
+  border-color: var(--line-strong);
+}
+
+.thumb-error {
+  position: absolute;
+  inset-inline-end: 2px;
+  top: 0;
+  padding-inline: 3px;
+  background: var(--bg);
+  color: var(--bad);
+  font: 12px var(--mono);
 }
 
 .strip-scroll {
@@ -457,10 +503,6 @@ input:focus-visible {
   animation: settle 320ms ease;
   pointer-events: none;
   transition: filter 180ms ease;
-}
-
-.frame.is-stale img {
-  filter: saturate(0.72) brightness(0.8);
 }
 
 .frame.comparing img {
@@ -792,11 +834,24 @@ input[type="text"] {
   padding: 6px 8px;
   font-family: var(--mono);
   font-size: 11px;
-  outline: none;
 }
 
 input[type="text"]:hover:not(:disabled) {
   border-color: rgba(226, 177, 90, 0.55);
+}
+
+.file-color-space {
+  width: 100%;
+  font-family: var(--mono);
+  font-size: 11px;
+  border-color: var(--line-strong);
+}
+
+.file-hint {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
 }
 
 input[type="range"] {

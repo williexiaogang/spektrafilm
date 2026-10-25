@@ -366,3 +366,105 @@ def test_stock_thumb_is_cached_and_preview_thumbnails_varies_one_axis():
     finally:
         server.run_simulation = original
         server._THUMB_CACHE.clear()
+
+
+def test_reference_png_converts_prophoto_primaries_to_srgb():
+    import base64
+    import colour
+    import numpy as np
+    from PIL import Image
+    from io import BytesIO
+
+    image = np.array([[[0.2, 0.25, 0.3], [0.001, 0.001, 0.001]]])
+    encoded = server._reference_png(image, 512, input_color_space="ProPhoto RGB")
+    assert encoded is not None
+    actual = np.asarray(Image.open(BytesIO(base64.b64decode(encoded))))
+    expected = colour.RGB_to_RGB(
+        image, "ProPhoto RGB", "sRGB", apply_cctf_decoding=False, apply_cctf_encoding=True
+    )
+    expected = (np.clip(expected, 0, 1) * 255).astype(np.uint8)
+    np.testing.assert_allclose(actual, expected, atol=1)
+    old_gamma_only = (np.power(image, 1 / 2.2) * 255).astype(np.uint8)
+    assert not np.allclose(actual, old_gamma_only, atol=1)
+
+
+def test_reference_png_uses_srgb_transfer_and_can_decode_encoded_input():
+    import base64
+    import numpy as np
+    from PIL import Image
+    from io import BytesIO
+
+    linear = np.full((2, 2, 3), 0.001)
+    result = server._reference_png(linear, 512, input_color_space="sRGB")
+    actual = np.asarray(Image.open(BytesIO(base64.b64decode(result))))
+    # The sRGB toe is 12.92 * L, not L ** (1 / 2.2).
+    np.testing.assert_allclose(actual, 3, atol=1)
+
+    encoded = np.full((2, 2, 3), 0.5)
+    result = server._reference_png(
+        encoded, 512, input_color_space="sRGB", input_cctf_decoding=True
+    )
+    actual = np.asarray(Image.open(BytesIO(base64.b64decode(result))))
+    np.testing.assert_allclose(actual, 127, atol=1)
+
+
+def test_linear_file_honors_selected_color_space(monkeypatch):
+    import numpy as np
+
+    image = np.full((4, 6, 3), 0.18)
+    monkeypatch.setattr(server, "_load_linear_image", lambda path: image)
+    prepared = server._resolve_preview_image({
+        "source": "path", "image_path": "linear.exr", "input_color_space": "ACEScg",
+    })
+    assert prepared["image"] is image
+    assert prepared["input_color_space"] == "ACEScg"
+    assert prepared["input_cctf_decoding"] is False
+
+
+def test_first_request_in_a_fresh_process_can_open_a_linear_file(tmp_path):
+    import numpy as np
+    import OpenImageIO as oiio
+
+    path = tmp_path / "linear.tif"
+    output = oiio.ImageOutput.create(str(path))
+    assert output.open(str(path), oiio.ImageSpec(16, 8, 3, oiio.FLOAT))
+    assert output.write_image(np.full((8, 16, 3), 0.18, dtype=np.float32))
+    output.close()
+    request = {"id": 1, "method": "preview", "params": {
+        "source": "path", "image_path": str(path), "input_color_space": "sRGB", "max_size": 16,
+    }}
+    # No preceding version/list_profiles request may prepare sys.path for us.
+    process = subprocess.run(
+        [sys.executable, "-u", str(SIDECAR)], input=json.dumps(request) + "\n",
+        capture_output=True, text=True, cwd=tmp_path, timeout=90,
+    )
+    assert process.returncode == 0, process.stderr
+    response = json.loads(process.stdout)
+    assert response["ok"], response
+    assert response["result"]["source"] == "path"
+    assert response["result"]["input_color_space"] == "sRGB"
+
+
+def test_preview_preserves_larger_size_and_reference_color_space(monkeypatch):
+    import numpy as np
+    from spektrafilm import init_params  # noqa: F401
+
+    image = np.full((16, 1024, 3), 0.18)
+    monkeypatch.setattr(server, "_resolve_preview_image", lambda params: {
+        "image": image, "source": "path", "image_path": "linear.exr",
+        "input_color_space": "ACEScg", "input_cctf_decoding": False,
+        "raw_cache": None, "white_balance": None, "lens_summary": None,
+    })
+    monkeypatch.setattr(server, "run_simulation", lambda image, params, mode: image)
+    seen = {}
+
+    def reference(image, size, **kwargs):
+        seen.update({"size": size, **kwargs})
+        return "reference"
+
+    monkeypatch.setattr(server, "_reference_png", reference)
+    result = server.preview_cmd({"max_size": 1024})
+    assert result["max_size"] == 1024
+    assert seen == {"size": 1024, "input_color_space": "ACEScg", "input_cctf_decoding": False}
+    assert server.preview_cmd({})["max_size"] == 512
+    assert server.preview_cmd({"max_size": 100000})["max_size"] == 2048

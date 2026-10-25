@@ -194,7 +194,7 @@ pipeline. This shell does not request a full-resolution scan.
 | `source` | `builtin-chart`, or `path` when `image_path` is set | `builtin-chart`, `path`, or `raw`. |
 | `image_path` | null | Linear file for `path` (`load_image_oiio`). RAW path for `raw`. |
 | `render_mode` | `preview` | `preview` or `scan`. |
-| `max_size` | `64` | Clamped to 16..256. Sets `settings.preview_max_size`. |
+| `max_size` | `512` | Clamped to 16..2048. Sets `settings.preview_max_size`. The shell offers 512 and 1024. |
 | `exposure_compensation_ev` | `0` | Clamped to -8..+8. Bias on `camera.exposure_compensation_ev`. |
 | `y_filter_shift` | `0` | `enlarger.y_filter_shift`, Kodak CC steps, clamped to -200..200. |
 | `m_filter_shift` | `0` | `enlarger.m_filter_shift`, same clamp. |
@@ -255,7 +255,7 @@ expectation as the Qt file loader.
 
 `raw_cache` is `hit`, `miss`, or `null` (not a RAW source).
 
-`reference_png_base64` is the same frame before simulation, resized to `max_size` and given a plain 2.2 gamma so the shell can hold-to-compare. It is not a second print. It is `null` if that view could not be encoded.
+`reference_png_base64` is the same frame before simulation, resized to `max_size`, transformed from the input RGB space/white point to sRGB, and encoded with the sRGB transfer function so the shell can hold-to-compare. `input_cctf_decoding` is respected. This includes conversion from ProPhoto RGB for the default RAW import. It is not a second print. It is `null` if that view could not be encoded.
 
 The first preview can take a while: Numba compiles on first use, and the
 spectral pipeline is per pixel. Keep `max_size` small. RAW demosaic is a

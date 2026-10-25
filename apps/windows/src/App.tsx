@@ -28,8 +28,8 @@ import {
 } from "./api";
 import { filmSwatch, GHOST_FILMS, GHOST_PAPERS, paperSwatch } from "./swatches";
 
-const DRAFT_SIZE = 64;
-const FINE_SIZE = 128;
+const DRAFT_SIZE = 512;
+const FINE_SIZE = 1024;
 const THUMB_SIZE = 96;
 const THUMB_DEBOUNCE_MS = 180;
 const INSPECTOR_DEFAULT = 268;
@@ -41,6 +41,9 @@ type SourceMode = "chart" | "file" | "raw";
 type Job = { tone: "idle" | "running" | "ok" | "error"; text: string };
 type Named = { id: string; name: string };
 type KeptFrame = { id: number; result: PreviewResult; key: string };
+type ThumbStatus = Record<string, "pending" | "ready" | "error">;
+
+const FILE_COLOR_SPACES = ["sRGB", "ProPhoto RGB", "Adobe RGB (1998)", "ACEScg", "ACES2065-1", "ITU-R BT.2020"];
 
 const WHITE_BALANCE_OPTIONS: { id: WhiteBalance; label: string; title: string }[] = [
   { id: "as_shot", label: "Shot", title: "As shot — camera white balance" },
@@ -52,6 +55,7 @@ const WHITE_BALANCE_OPTIONS: { id: WhiteBalance; label: string; title: string }[
 export default function App() {
   const [phase, setPhase] = useState<Phase>("booting");
   const [bootError, setBootError] = useState<string | null>(null);
+  const [bootAttempt, setBootAttempt] = useState(0);
   const [health, setHealth] = useState<Health | null>(null);
   const [version, setVersion] = useState<VersionInfo | null>(null);
   const [films, setFilms] = useState<Profile[]>([]);
@@ -70,6 +74,7 @@ export default function App() {
   const [maxSize, setMaxSize] = useState(DRAFT_SIZE);
   const [sourceMode, setSourceMode] = useState<SourceMode>("chart");
   const [imagePath, setImagePath] = useState("");
+  const [fileColorSpace, setFileColorSpace] = useState("sRGB");
   const [rawPath, setRawPath] = useState("");
   const [whiteBalance, setWhiteBalance] = useState<WhiteBalance>("as_shot");
   const [temperature, setTemperature] = useState(5500);
@@ -87,6 +92,16 @@ export default function App() {
   const [inspectorWidth, setInspectorWidth] = useState(INSPECTOR_DEFAULT);
   const [filmThumbs, setFilmThumbs] = useState<Record<string, string>>({});
   const [paperThumbs, setPaperThumbs] = useState<Record<string, string>>({});
+  const [filmThumbStatus, setFilmThumbStatus] = useState<ThumbStatus>({});
+  const [paperThumbStatus, setPaperThumbStatus] = useState<ThumbStatus>({});
+  const [filmThumbAttempt, setFilmThumbAttempt] = useState(0);
+  const [paperThumbAttempt, setPaperThumbAttempt] = useState(0);
+
+  useEffect(() => {
+    const stopComparing = () => setComparing(false);
+    window.addEventListener("blur", stopComparing);
+    return () => window.removeEventListener("blur", stopComparing);
+  }, []);
 
   useEffect(() => {
     if (!inTauri()) {
@@ -96,6 +111,8 @@ export default function App() {
     }
 
     let cancelled = false;
+    setPhase("booting");
+    setBootError(null);
     (async () => {
       try {
         const [healthInfo, versionInfo, filmList, paperList] = await Promise.all([
@@ -133,7 +150,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [bootAttempt]);
 
   const shellReady = phase === "ready";
   const filmKey = films.map((profile) => profile.id).join("|");
@@ -145,8 +162,10 @@ export default function App() {
     }
     let cancelled = false;
     const selected = filmId;
+    const controller = new AbortController();
     const order = [...films].sort((a, b) => Number(b.id === selected) - Number(a.id === selected));
     setFilmThumbs({});
+    setFilmThumbStatus(Object.fromEntries(films.map((profile) => [profile.id, "pending"])));
     const timer = window.setTimeout(() => {
       void (async () => {
         for (const profile of order) {
@@ -158,7 +177,7 @@ export default function App() {
               film_profile: profile.id,
               print_profile: paperId,
               max_size: THUMB_SIZE,
-            });
+            }, controller.signal);
             if (cancelled) {
               return;
             }
@@ -166,19 +185,23 @@ export default function App() {
               ...current,
               [profile.id]: `data:${thumb.mime};base64,${thumb.png_base64}`,
             }));
+            setFilmThumbStatus((current) => ({ ...current, [profile.id]: "ready" }));
           } catch {
-            // The color study stays in the frame when a thumb cannot be encoded.
+            if (!cancelled) {
+              setFilmThumbStatus((current) => ({ ...current, [profile.id]: "error" }));
+            }
           }
         }
       })();
     }, THUMB_DEBOUNCE_MS);
     return () => {
       cancelled = true;
+      controller.abort();
       window.clearTimeout(timer);
     };
     // The selected stock is ordered first, but changing it must not rebake the strip.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [shellReady, paperId, filmKey]);
+  }, [shellReady, paperId, filmKey, filmThumbAttempt]);
 
   useEffect(() => {
     if (!shellReady || !filmId || papers.length === 0) {
@@ -186,8 +209,10 @@ export default function App() {
     }
     let cancelled = false;
     const selected = paperId;
+    const controller = new AbortController();
     const order = [...papers].sort((a, b) => Number(b.id === selected) - Number(a.id === selected));
     setPaperThumbs({});
+    setPaperThumbStatus(Object.fromEntries(papers.map((profile) => [profile.id, "pending"])));
     const timer = window.setTimeout(() => {
       void (async () => {
         for (const profile of order) {
@@ -199,7 +224,7 @@ export default function App() {
               film_profile: filmId,
               print_profile: profile.id,
               max_size: THUMB_SIZE,
-            });
+            }, controller.signal);
             if (cancelled) {
               return;
             }
@@ -207,18 +232,22 @@ export default function App() {
               ...current,
               [profile.id]: `data:${thumb.mime};base64,${thumb.png_base64}`,
             }));
+            setPaperThumbStatus((current) => ({ ...current, [profile.id]: "ready" }));
           } catch {
-            // The paper color study stays until a thumb arrives.
+            if (!cancelled) {
+              setPaperThumbStatus((current) => ({ ...current, [profile.id]: "error" }));
+            }
           }
         }
       })();
     }, THUMB_DEBOUNCE_MS);
     return () => {
       cancelled = true;
+      controller.abort();
       window.clearTimeout(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [shellReady, filmId, paperKey]);
+  }, [shellReady, filmId, paperKey, paperThumbAttempt]);
   const customBalance = whiteBalance === "custom";
   const filmTiles: Named[] = films.length > 0 ? films : GHOST_FILMS;
   const paperTiles: Named[] = papers.length > 0 ? papers : GHOST_PAPERS;
@@ -239,6 +268,7 @@ export default function App() {
         maxSize,
         sourceMode,
         imagePath: sourceMode === "file" ? imagePath.trim() : "",
+        fileColorSpace: sourceMode === "file" ? fileColorSpace : "",
         rawPath: sourceMode === "raw" ? rawPath.trim() : "",
         whiteBalance,
         temperature: customBalance ? temperature : null,
@@ -249,6 +279,7 @@ export default function App() {
       customBalance,
       exposure,
       filmId,
+      fileColorSpace,
       halationActive,
       halationAmount,
       halationSize,
@@ -400,6 +431,7 @@ export default function App() {
         ...simulationParams(),
         source: sourceMode === "chart" ? "builtin-chart" : sourceMode === "file" ? "path" : "raw",
         image_path: sourceMode === "file" ? filePath : sourceMode === "raw" ? cameraPath : null,
+        ...(sourceMode === "file" ? { input_color_space: fileColorSpace, input_cctf_decoding: false } : {}),
         ...(sourceMode === "raw" ? rawParams(cameraPath) : {}),
       });
       const id = Date.now();
@@ -505,6 +537,11 @@ export default function App() {
             {busy ? "Working" : renderMode === "scan" ? "Scan" : "Expose"}
           </button>
           <StatusPill phase={phase} job={job} title={lampTitle} />
+          {phase === "error" ? (
+            <button type="button" className="btn btn-sm secondary" onClick={() => setBootAttempt((value) => value + 1)}>
+              Reconnect
+            </button>
+          ) : null}
         </div>
       </header>
 
@@ -515,7 +552,8 @@ export default function App() {
         selected={filmId}
         disabled={!shellReady}
         thumbs={filmThumbs}
-        pending={shellReady}
+        status={filmThumbStatus}
+        onRetry={() => setFilmThumbAttempt((value) => value + 1)}
         onSelect={setFilmId}
       />
       <StockStrip
@@ -525,7 +563,8 @@ export default function App() {
         selected={paperId}
         disabled={!shellReady}
         thumbs={paperThumbs}
-        pending={shellReady}
+        status={paperThumbStatus}
+        onRetry={() => setPaperThumbAttempt((value) => value + 1)}
         onSelect={setPaperId}
       />
 
@@ -552,7 +591,6 @@ export default function App() {
                 key={comparing ? "reference" : String(shownId ?? "print")}
                 alt={comparing ? "Scene before development" : "Developed preview"}
                 src={`data:${preview.mime};base64,${viewPng}`}
-                style={{ imageRendering: preview.width < 200 ? "pixelated" : "auto" }}
               />
             ) : (
               <EmptyStage />
@@ -563,10 +601,13 @@ export default function App() {
               <button
                 type="button"
                 className={`hold ${comparing ? "on" : ""}`}
-                title="Hold to compare the scene before development"
+                title="Hold mouse, Space, or Enter to compare the scene before development"
+                aria-label="Hold to compare original"
+                aria-pressed={comparing}
                 onPointerDown={(event) => {
                   event.preventDefault();
                   event.stopPropagation();
+                  event.currentTarget.setPointerCapture(event.pointerId);
                   holdCompare(true);
                 }}
                 onPointerUp={(event) => {
@@ -575,6 +616,20 @@ export default function App() {
                 }}
                 onPointerLeave={() => holdCompare(false)}
                 onPointerCancel={() => holdCompare(false)}
+                onKeyDown={(event) => {
+                  if (event.key === " " || event.key === "Enter") {
+                    event.preventDefault();
+                    holdCompare(true);
+                  }
+                }}
+                onKeyUp={(event) => {
+                  if (event.key === " " || event.key === "Enter") {
+                    event.preventDefault();
+                    holdCompare(false);
+                  }
+                }}
+                onBlur={() => holdCompare(false)}
+                onLostPointerCapture={() => holdCompare(false)}
               >
                 <CompareIcon />
                 Hold
@@ -638,14 +693,14 @@ export default function App() {
         />
 
         <aside className="inspector">
-          <p className={`readout ${job.tone}`} title={job.text}>
+          <p className={`readout ${job.tone}`} title={job.text} role="status" aria-live="polite">
             {preview
               ? `${preview.width}×${preview.height} · ${(preview.elapsed_ms / 1000).toFixed(1)} s`
               : job.tone === "idle"
                 ? "No print"
                 : job.text}
           </p>
-          {runError ? <p className="error">{runError}</p> : null}
+          {runError ? <p className="error" role="alert">{runError}</p> : null}
           {bootError && phase !== "ready" ? <p className="error">{bootError}</p> : null}
 
           <section className="cluster">
@@ -814,6 +869,18 @@ export default function App() {
                   onChange={(event) => setImagePath(event.target.value)}
                 />
               </label>
+              <label className="field">
+                <span>RGB space</span>
+                <select
+                  className="select select-sm file-color-space"
+                  value={fileColorSpace}
+                  disabled={!shellReady}
+                  onChange={(event) => setFileColorSpace(event.target.value)}
+                >
+                  {FILE_COLOR_SPACES.map((space) => <option key={space} value={space}>{space}</option>)}
+                </select>
+              </label>
+              <p className="file-hint">Scene-linear TIFF/EXR. Match the RGB space used when exporting the file.</p>
             </section>
           ) : null}
 
@@ -915,7 +982,8 @@ function StockStrip({
   selected,
   disabled,
   thumbs,
-  pending,
+  status,
+  onRetry,
   onSelect,
 }: {
   label: string;
@@ -924,7 +992,8 @@ function StockStrip({
   selected: string;
   disabled: boolean;
   thumbs: Record<string, string>;
-  pending: boolean;
+  status: ThumbStatus;
+  onRetry: () => void;
   onSelect: (id: string) => void;
 }) {
   function onKey(event: ReactKeyboardEvent<HTMLButtonElement>) {
@@ -949,7 +1018,14 @@ function StockStrip({
 
   return (
     <div className={`strip ${kind}`} role="group" aria-label={label}>
-      <span className="strip-label">{label}</span>
+      <div className="strip-heading">
+        <span className="strip-label">{label}</span>
+        {Object.values(status).includes("error") ? (
+          <button type="button" className="btn btn-xs thumb-retry" disabled={disabled} aria-label={`Retry ${label.toLowerCase()} thumbnails`} onClick={onRetry}>
+            Retry
+          </button>
+        ) : null}
+      </div>
       <div className="strip-scroll">
         {profiles.map((profile) => {
           const on = selected === profile.id;
@@ -961,18 +1037,21 @@ function StockStrip({
               className={`tile ${on ? "on" : ""}`}
               data-stock={profile.id}
               disabled={disabled}
-              title={profile.name}
+              title={status[profile.id] === "error" ? `${profile.name} — thumbnail unavailable; use Retry` : profile.name}
+              aria-label={status[profile.id] === "error" ? `${profile.name}, thumbnail unavailable` : profile.name}
+              aria-busy={status[profile.id] === "pending"}
               aria-pressed={on}
               tabIndex={disabled ? -1 : on ? 0 : -1}
               onKeyDown={onKey}
               onClick={() => onSelect(profile.id)}
             >
               <span
-                className={`swatch ${pending && !thumb ? "pending" : ""}`}
+                className={`swatch ${status[profile.id] === "pending" && !thumb ? "pending" : ""}`}
                 style={{ background: kind === "film" ? filmSwatch(profile.id) : paperSwatch(profile.id) }}
               >
                 {kind === "film" && !thumb ? <i className="chartlet" aria-hidden="true" /> : null}
                 {thumb ? <img alt="" src={thumb} /> : null}
+                {status[profile.id] === "error" ? <span className="thumb-error" aria-hidden="true">!</span> : null}
               </span>
               <span className="cap">{shortStock(profile.name)}</span>
             </button>

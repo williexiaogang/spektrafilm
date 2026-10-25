@@ -100,6 +100,8 @@ export type PreviewRequest = {
   temperature?: number;
   tint?: number;
   lens_correction?: boolean;
+  input_color_space?: string;
+  input_cctf_decoding?: boolean;
 };
 
 export type RawImportRequest = {
@@ -176,12 +178,23 @@ export function runPreview(params: PreviewRequest): Promise<PreviewResult> {
   return call<PreviewResult>("run_preview", { params });
 }
 
+// Keep at most one native thumbnail request in flight. Aborted strip refreshes
+// are skipped before IPC so rapid stock changes cannot fill the Python queue.
+let thumbnailQueue: Promise<unknown> = Promise.resolve();
+
 export function stockThumb(params: {
   film_profile: string;
   print_profile: string;
   max_size?: number;
-}): Promise<StockThumb> {
-  return call<StockThumb>("stock_thumb", { params });
+}, signal?: AbortSignal): Promise<StockThumb> {
+  const request = thumbnailQueue.then(() => {
+    if (signal?.aborted) {
+      throw new DOMException("Thumbnail refresh cancelled", "AbortError");
+    }
+    return call<StockThumb>("stock_thumb", { params });
+  });
+  thumbnailQueue = request.catch(() => undefined);
+  return request;
 }
 
 export function importRaw(params: RawImportRequest): Promise<RawImport> {

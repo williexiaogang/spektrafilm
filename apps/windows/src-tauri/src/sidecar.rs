@@ -4,33 +4,89 @@
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver};
+use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Duration;
 
 use serde_json::Value;
 use tauri::AppHandle;
 use tauri::Manager;
 
-pub struct SidecarState(pub Mutex<Result<Sidecar, String>>);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
+
+pub struct SidecarState {
+    connection: Mutex<Option<Sidecar>>,
+    script: Result<PathBuf, String>,
+    process: Mutex<Option<Arc<Mutex<Child>>>>,
+    shutting_down: AtomicBool,
+}
 
 impl SidecarState {
+    pub fn new(script: Result<PathBuf, String>) -> Self {
+        Self {
+            connection: Mutex::new(None),
+            script,
+            process: Mutex::new(None),
+            shutting_down: AtomicBool::new(false),
+        }
+    }
+
     pub fn call(&self, method: &str, params: Value) -> Result<Value, String> {
         let mut guard = self
-            .0
+            .connection
             .lock()
             .map_err(|err| format!("sidecar lock poisoned: {err}"))?;
-        match guard.as_mut() {
-            Ok(sidecar) => sidecar.call(method, params),
-            Err(err) => Err(err.clone()),
+        if self.shutting_down.load(Ordering::SeqCst) {
+            return Err("Application is closing".into());
+        }
+        if guard.is_none() {
+            let script = self.script.as_ref().map_err(Clone::clone)?;
+            let sidecar = Sidecar::spawn(script)?;
+            let mut process = self.process.lock().map_err(|err| err.to_string())?;
+            if self.shutting_down.load(Ordering::SeqCst) {
+                return Err("Application is closing".into());
+            }
+            *process = Some(Arc::clone(&sidecar.child));
+            *guard = Some(sidecar);
+        }
+        let sidecar = guard.as_mut().expect("sidecar was started");
+        let result = sidecar.call(method, params);
+        if sidecar.stopped {
+            // A fresh process on the next request cannot consume a late response
+            // from a request that timed out or lost its protocol framing.
+            *guard = None;
+        }
+        result
+    }
+
+    pub fn shutdown(&self) {
+        self.shutting_down.store(true, Ordering::SeqCst);
+        // Do not take the connection lock: an in-flight preview may hold it.
+        if let Ok(process) = self.process.lock() {
+            if let Some(child) = process.as_ref() {
+                if let Ok(mut child) = child.lock() {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                }
+            }
         }
     }
 }
 
+pub async fn call(app: AppHandle, method: &'static str, params: Value) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || app.state::<SidecarState>().call(method, params))
+        .await
+        .map_err(|err| format!("sidecar task failed: {err}"))?
+}
+
 pub struct Sidecar {
-    child: Child,
+    child: Arc<Mutex<Child>>,
     stdin: ChildStdin,
-    stdout: BufReader<std::process::ChildStdout>,
+    responses: Receiver<Result<String, String>>,
     next_id: u64,
+    stopped: bool,
 }
 
 impl Sidecar {
@@ -43,8 +99,17 @@ impl Sidecar {
         }
 
         let mut errors = Vec::new();
-        for invocation in python_invocations() {
-            match try_spawn(&invocation, &script) {
+        for invocation in python_invocations(&script) {
+            // Launching `py -3.13` can succeed even when that interpreter is
+            // missing. Verify the protocol before choosing an invocation.
+            match try_spawn(&invocation, &script).and_then(|mut sidecar| {
+                sidecar.call_with_timeout(
+                    "health",
+                    serde_json::json!({}),
+                    Duration::from_secs(10),
+                )?;
+                Ok(sidecar)
+            }) {
                 Ok(sidecar) => return Ok(sidecar),
                 Err(err) => errors.push(format!("{}: {err}", invocation.join(" "))),
             }
@@ -56,14 +121,40 @@ impl Sidecar {
     }
 
     pub fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
-        if let Some(status) = self
-            .child
-            .try_wait()
-            .map_err(|err| format!("sidecar status: {err}"))?
-        {
-            return Err(format!("Python sidecar exited ({status})"));
-        }
+        self.call_with_timeout(method, params, REQUEST_TIMEOUT)
+    }
 
+    fn call_with_timeout(
+        &mut self,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+    ) -> Result<Value, String> {
+        let result = self.exchange(method, params, timeout);
+        if result.is_err() {
+            self.shutdown();
+        }
+        let response = result?;
+        if response.get("ok").and_then(Value::as_bool) == Some(true) {
+            return Ok(response.get("result").cloned().unwrap_or(Value::Null));
+        }
+        // A well-framed runtime error does not damage the connection/cache.
+        Err(response
+            .pointer("/error/message")
+            .and_then(Value::as_str)
+            .unwrap_or("sidecar request failed")
+            .to_string())
+    }
+
+    fn exchange(
+        &mut self,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+    ) -> Result<Value, String> {
+        if self.stopped {
+            return Err("Python sidecar is stopped".into());
+        }
         self.next_id += 1;
         let id = self.next_id;
         let request = serde_json::json!({
@@ -76,43 +167,30 @@ impl Sidecar {
             .flush()
             .map_err(|err| format!("sidecar stdin: {err}"))?;
 
-        let line = self.read_response_line()?;
+        let line = self.responses.recv_timeout(timeout)
+            .map_err(|err| match err {
+                mpsc::RecvTimeoutError::Timeout => format!(
+                    "Python request '{method}' timed out after {} seconds. Retry to start a fresh sidecar.",
+                    timeout.as_secs()
+                ),
+                mpsc::RecvTimeoutError::Disconnected => "Python sidecar closed stdout. Retry to restart it.".into(),
+            })??;
         let response: Value = serde_json::from_str(&line)
             .map_err(|err| format!("sidecar returned invalid JSON ({err}): {line}"))?;
-        if response.get("ok").and_then(Value::as_bool) == Some(true) {
-            return Ok(response.get("result").cloned().unwrap_or(Value::Null));
+        if response.get("id").and_then(Value::as_u64) != Some(id)
+            || response.get("ok").and_then(Value::as_bool).is_none()
+        {
+            return Err("Python sidecar returned an invalid or out-of-order response".into());
         }
-        let message = response
-            .pointer("/error/message")
-            .and_then(Value::as_str)
-            .unwrap_or("sidecar request failed");
-        Err(message.to_string())
+        Ok(response)
     }
 
     pub fn shutdown(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-
-    fn read_response_line(&mut self) -> Result<String, String> {
-        for _ in 0..64 {
-            let mut line = String::new();
-            let read = self
-                .stdout
-                .read_line(&mut line)
-                .map_err(|err| format!("sidecar stdout: {err}"))?;
-            if read == 0 {
-                return Err("Python sidecar closed stdout".into());
-            }
-            let trimmed = line.trim();
-            if trimmed.starts_with('{') {
-                return Ok(trimmed.to_string());
-            }
-            if !trimmed.is_empty() {
-                eprintln!("[sidecar:stdout] {trimmed}");
-            }
+        self.stopped = true;
+        if let Ok(mut child) = self.child.lock() {
+            let _ = child.kill();
+            let _ = child.wait();
         }
-        Err("Python sidecar did not return a JSON response".into())
     }
 }
 
@@ -155,26 +233,38 @@ pub fn locate_script(app: &AppHandle) -> Result<PathBuf, String> {
     )
 }
 
-fn python_invocations() -> Vec<Vec<String>> {
+fn python_invocations(script: &Path) -> Vec<Vec<String>> {
     if let Ok(explicit) = std::env::var("SPEKTRAFILM_PYTHON") {
         let explicit = explicit.trim();
         if !explicit.is_empty() {
             return vec![split_command(explicit)];
         }
     }
+    let mut invocations = Vec::new();
+    if let Some(root) = infer_repo_root(script) {
+        let python = if cfg!(windows) {
+            root.join(".venv/Scripts/python.exe")
+        } else {
+            root.join(".venv/bin/python")
+        };
+        if python.is_file() {
+            invocations.push(vec![python.to_string_lossy().into_owned()]);
+        }
+    }
     if cfg!(windows) {
-        vec![
+        invocations.extend([
             vec!["py".into(), "-3.13".into()],
             vec!["python".into()],
             vec!["python3".into()],
-        ]
+        ]);
     } else {
-        vec![
+        invocations.extend([
             vec!["python3.13".into()],
             vec!["python3".into()],
             vec!["python".into()],
-        ]
+        ]);
     }
+    invocations
 }
 
 fn split_command(command: &str) -> Vec<String> {
@@ -256,11 +346,42 @@ fn try_spawn(invocation: &[String], script: &Path) -> Result<Sidecar, String> {
         }
     });
 
+    let (sender, responses) = mpsc::channel();
+    thread::spawn(move || {
+        let mut skipped = 0;
+        for line in BufReader::new(stdout).lines() {
+            match line {
+                Ok(line) if line.trim_start().starts_with('{') => {
+                    skipped = 0;
+                    if sender.send(Ok(line)).is_err() {
+                        return;
+                    }
+                }
+                Ok(line) => {
+                    if !line.is_empty() {
+                        eprintln!("[sidecar:stdout] {line}");
+                    }
+                    skipped += 1;
+                    if skipped >= 64 {
+                        let _ = sender
+                            .send(Err("Python sidecar did not return a JSON response".into()));
+                        return;
+                    }
+                }
+                Err(err) => {
+                    let _ = sender.send(Err(format!("sidecar stdout: {err}")));
+                    return;
+                }
+            }
+        }
+    });
+
     Ok(Sidecar {
-        child,
+        child: Arc::new(Mutex::new(child)),
         stdin,
-        stdout: BufReader::new(stdout),
+        responses,
         next_id: 0,
+        stopped: false,
     })
 }
 
@@ -273,5 +394,116 @@ fn infer_repo_root(script: &Path) -> Option<PathBuf> {
             return Some(current.to_path_buf());
         }
         current = current.parent()?;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
+    struct Fixture(PathBuf);
+
+    impl Fixture {
+        fn new() -> Self {
+            let stamp = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "spektrafilm-sidecar-{}-{stamp}.py",
+                std::process::id()
+            ));
+            std::fs::write(
+                &path,
+                r#"
+import json, os, sys, time
+for line in sys.stdin:
+    request = json.loads(line)
+    method = request['method']
+    if method == 'hang':
+        time.sleep(60)
+    if method == 'crash':
+        os._exit(7)
+    response = {'id': request['id'], 'ok': True, 'result': {'status': 'ok'}}
+    if method == 'wrong_id':
+        response['id'] += 1
+    if method == 'runtime_error':
+        response = {'id': request['id'], 'ok': False, 'error': {'message': 'invalid image'}}
+    print(json.dumps(response), flush=True)
+"#,
+            )
+            .unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    #[test]
+    fn timeout_kills_the_process_instead_of_consuming_a_late_reply() {
+        let fixture = Fixture::new();
+        let mut sidecar = Sidecar::spawn(&fixture.0).unwrap();
+        let started = Instant::now();
+        let error = sidecar
+            .call_with_timeout("hang", json!({}), Duration::from_millis(100))
+            .unwrap_err();
+        assert!(error.contains("timed out"), "{error}");
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert!(sidecar.child.lock().unwrap().try_wait().unwrap().is_some());
+        assert!(sidecar
+            .call("health", json!({}))
+            .unwrap_err()
+            .contains("stopped"));
+    }
+
+    #[test]
+    fn runtime_errors_preserve_the_connection_but_wrong_ids_terminate_it() {
+        let fixture = Fixture::new();
+        let mut sidecar = Sidecar::spawn(&fixture.0).unwrap();
+        assert_eq!(
+            sidecar.call("runtime_error", json!({})).unwrap_err(),
+            "invalid image"
+        );
+        assert!(!sidecar.stopped);
+        assert_eq!(sidecar.call("health", json!({})).unwrap()["status"], "ok");
+        assert!(sidecar.call("wrong_id", json!({})).is_err());
+        assert!(sidecar.stopped);
+    }
+
+    #[test]
+    fn next_request_restarts_a_crashed_sidecar() {
+        let fixture = Fixture::new();
+        let state = SidecarState::new(Ok(fixture.0.clone()));
+        assert!(state.call("crash", json!({})).is_err());
+        assert!(state.connection.lock().unwrap().is_none());
+        assert_eq!(state.call("health", json!({})).unwrap()["status"], "ok");
+        state.shutdown();
+    }
+
+    #[test]
+    fn shutdown_does_not_wait_for_an_in_flight_preview() {
+        let fixture = Fixture::new();
+        let state = Arc::new(SidecarState::new(Ok(fixture.0.clone())));
+        state.call("health", json!({})).unwrap();
+        let worker_state = Arc::clone(&state);
+        let worker = thread::spawn(move || worker_state.call("hang", json!({})));
+        let started = Instant::now();
+        while state.connection.try_lock().is_ok() {
+            assert!(started.elapsed() < Duration::from_secs(5));
+            thread::yield_now();
+        }
+        state.shutdown();
+        assert!(worker.join().unwrap().is_err());
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert!(state
+            .call("health", json!({}))
+            .unwrap_err()
+            .contains("closing"));
     }
 }

@@ -11,6 +11,6 @@ Public editors such as [Fotufilm Engine](https://fotufilm.com/documentation.html
 
 Motion is a safelight sweep while a render runs, a short fade when a print appears, and a small press on Expose and on a stock frame. `prefers-reduced-motion` turns those off. Focus is a yellow ring.
 
-A later polish pass tightened the same layout. The film row is one strip: sprocket holes, frames set close, a brass tick on the selected stock, and left/right keys once a frame is focused. A stale print dims and takes a brass mat; a matching print stays full and quiet. Hold sits on the picture as a corner control. Exposure, filters, and halation share one inset group.
+A later polish pass tightened the same layout. The film row is one strip: sprocket holes, frames set close, a brass tick on the selected stock, and left/right keys once a frame is focused. A stale print takes a brass mat and a text label; its pixels keep their original colors and brightness. Hold sits on the picture as a corner control and works with pointer hold or Space/Enter hold. Exposure, filters, and halation share one inset group.
 
 Each tile is a real `preview_mode` develop of the built-in chart for that stock and the partner profile, at a 96px long edge. The color studies stay underneath as placeholders until a frame arrives. The sidecar caches each pair. Changing paper rebakes the film strip. Changing film rebakes the paper strip. Grading the easel does not rebake the strip. A cold catalog is one small simulation per tile, in series.
