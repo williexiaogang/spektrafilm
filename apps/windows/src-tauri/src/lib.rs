@@ -36,6 +36,16 @@ fn run_preview(state: State<SidecarState>, params: Value) -> Result<Value, Strin
 }
 
 #[tauri::command]
+fn stock_thumb(state: State<SidecarState>, params: Value) -> Result<Value, String> {
+    state.call("stock_thumb", params)
+}
+
+#[tauri::command]
+fn preview_thumbnails(state: State<SidecarState>, params: Value) -> Result<Value, String> {
+    state.call("preview_thumbnails", params)
+}
+
+#[tauri::command]
 fn import_raw(state: State<SidecarState>, params: Value) -> Result<Value, String> {
     state.call("import_raw", params)
 }
@@ -60,6 +70,8 @@ pub fn run() {
             list_print_profiles,
             import_raw,
             run_preview,
+            stock_thumb,
+            preview_thumbnails,
         ])
         .build(tauri::generate_context!())
         .expect("failed to build SpektraFilm")

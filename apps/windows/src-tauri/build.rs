@@ -10,6 +10,8 @@ fn main() {
             "list_print_profiles",
             "import_raw",
             "run_preview",
+            "stock_thumb",
+            "preview_thumbnails",
         ]),
     ))
     .expect("failed to run tauri-build");

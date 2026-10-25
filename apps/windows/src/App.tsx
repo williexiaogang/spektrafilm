@@ -17,6 +17,7 @@ import {
   runPreview,
   sidecarHealth,
   sidecarVersion,
+  stockThumb,
   type Health,
   type PreviewResult,
   type Profile,
@@ -29,6 +30,8 @@ import { filmSwatch, GHOST_FILMS, GHOST_PAPERS, paperSwatch } from "./swatches";
 
 const DRAFT_SIZE = 64;
 const FINE_SIZE = 128;
+const THUMB_SIZE = 96;
+const THUMB_DEBOUNCE_MS = 180;
 const INSPECTOR_DEFAULT = 268;
 const INSPECTOR_MIN = 210;
 const INSPECTOR_MAX = 440;
@@ -82,6 +85,8 @@ export default function App() {
   const [shownId, setShownId] = useState<number | null>(null);
   const [comparing, setComparing] = useState(false);
   const [inspectorWidth, setInspectorWidth] = useState(INSPECTOR_DEFAULT);
+  const [filmThumbs, setFilmThumbs] = useState<Record<string, string>>({});
+  const [paperThumbs, setPaperThumbs] = useState<Record<string, string>>({});
 
   useEffect(() => {
     if (!inTauri()) {
@@ -131,6 +136,89 @@ export default function App() {
   }, []);
 
   const shellReady = phase === "ready";
+  const filmKey = films.map((profile) => profile.id).join("|");
+  const paperKey = papers.map((profile) => profile.id).join("|");
+
+  useEffect(() => {
+    if (!shellReady || !paperId || films.length === 0) {
+      return;
+    }
+    let cancelled = false;
+    const selected = filmId;
+    const order = [...films].sort((a, b) => Number(b.id === selected) - Number(a.id === selected));
+    setFilmThumbs({});
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        for (const profile of order) {
+          if (cancelled) {
+            return;
+          }
+          try {
+            const thumb = await stockThumb({
+              film_profile: profile.id,
+              print_profile: paperId,
+              max_size: THUMB_SIZE,
+            });
+            if (cancelled) {
+              return;
+            }
+            setFilmThumbs((current) => ({
+              ...current,
+              [profile.id]: `data:${thumb.mime};base64,${thumb.png_base64}`,
+            }));
+          } catch {
+            // The color study stays in the frame when a thumb cannot be encoded.
+          }
+        }
+      })();
+    }, THUMB_DEBOUNCE_MS);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+    // The selected stock is ordered first, but changing it must not rebake the strip.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shellReady, paperId, filmKey]);
+
+  useEffect(() => {
+    if (!shellReady || !filmId || papers.length === 0) {
+      return;
+    }
+    let cancelled = false;
+    const selected = paperId;
+    const order = [...papers].sort((a, b) => Number(b.id === selected) - Number(a.id === selected));
+    setPaperThumbs({});
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        for (const profile of order) {
+          if (cancelled) {
+            return;
+          }
+          try {
+            const thumb = await stockThumb({
+              film_profile: filmId,
+              print_profile: profile.id,
+              max_size: THUMB_SIZE,
+            });
+            if (cancelled) {
+              return;
+            }
+            setPaperThumbs((current) => ({
+              ...current,
+              [profile.id]: `data:${thumb.mime};base64,${thumb.png_base64}`,
+            }));
+          } catch {
+            // The paper color study stays until a thumb arrives.
+          }
+        }
+      })();
+    }, THUMB_DEBOUNCE_MS);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shellReady, filmId, paperKey]);
   const customBalance = whiteBalance === "custom";
   const filmTiles: Named[] = films.length > 0 ? films : GHOST_FILMS;
   const paperTiles: Named[] = papers.length > 0 ? papers : GHOST_PAPERS;
@@ -426,6 +514,8 @@ export default function App() {
         profiles={filmTiles}
         selected={filmId}
         disabled={!shellReady}
+        thumbs={filmThumbs}
+        pending={shellReady}
         onSelect={setFilmId}
       />
       <StockStrip
@@ -434,6 +524,8 @@ export default function App() {
         profiles={paperTiles}
         selected={paperId}
         disabled={!shellReady}
+        thumbs={paperThumbs}
+        pending={shellReady}
         onSelect={setPaperId}
       />
 
@@ -822,6 +914,8 @@ function StockStrip({
   profiles,
   selected,
   disabled,
+  thumbs,
+  pending,
   onSelect,
 }: {
   label: string;
@@ -829,6 +923,8 @@ function StockStrip({
   profiles: Named[];
   selected: string;
   disabled: boolean;
+  thumbs: Record<string, string>;
+  pending: boolean;
   onSelect: (id: string) => void;
 }) {
   function onKey(event: ReactKeyboardEvent<HTMLButtonElement>) {
@@ -857,6 +953,7 @@ function StockStrip({
       <div className="strip-scroll">
         {profiles.map((profile) => {
           const on = selected === profile.id;
+          const thumb = thumbs[profile.id];
           return (
             <button
               key={profile.id}
@@ -871,10 +968,11 @@ function StockStrip({
               onClick={() => onSelect(profile.id)}
             >
               <span
-                className="swatch"
+                className={`swatch ${pending && !thumb ? "pending" : ""}`}
                 style={{ background: kind === "film" ? filmSwatch(profile.id) : paperSwatch(profile.id) }}
               >
-                {kind === "film" ? <i className="chartlet" aria-hidden="true" /> : null}
+                {kind === "film" && !thumb ? <i className="chartlet" aria-hidden="true" /> : null}
+                {thumb ? <img alt="" src={thumb} /> : null}
               </span>
               <span className="cap">{shortStock(profile.name)}</span>
             </button>

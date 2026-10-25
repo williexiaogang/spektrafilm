@@ -21,11 +21,13 @@ import zlib
 from pathlib import Path
 
 PROTOCOL_VERSION = 1
-SIDECAR_VERSION = "0.2.0"
+SIDECAR_VERSION = "0.3.0"
 _WHITE_BALANCE_MODES = frozenset({"as_shot", "daylight", "tungsten", "custom"})
 
 _PROFILE_SUMMARIES: list[dict] | None = None
 _RAW_CACHE: dict | None = None
+# (film id, print id, long edge) -> encoded thumb without the cached flag.
+_THUMB_CACHE: dict[tuple[str, str, int], dict] = {}
 
 
 def repo_root() -> Path | None:
@@ -511,6 +513,97 @@ def _reference_png(image, max_size: int) -> str | None:
     return base64.b64encode(png).decode("ascii")
 
 
+def _thumb_chart(max_size: int):
+    """The built-in chart, scaled with nearest neighbors so patches stay flat.
+
+    Thumbs compare stocks. They are not the frame on the easel, and they are
+    not re-rendered when exposure or the filters move.
+    """
+    import numpy as np
+
+    chart = _builtin_chart()
+    long_edge = max(int(chart.shape[0]), int(chart.shape[1]))
+    if long_edge >= max_size:
+        return chart
+    scale = max(1, int(round(max_size / long_edge)))
+    return np.repeat(np.repeat(chart, scale, axis=0), scale, axis=1)
+
+
+def _render_stock_thumb(film: str, paper: str, max_size: int) -> dict:
+    key = (film, paper, max_size)
+    cached = _THUMB_CACHE.get(key)
+    if cached is not None:
+        return {**cached, "cached": True}
+
+    ensure_import_path()
+    from spektrafilm import init_params
+
+    image = _thumb_chart(max_size)
+    runtime_params = init_params(film_profile=film, print_profile=paper)
+    _apply_interactive_params(
+        runtime_params,
+        {},
+        render_mode="preview",
+        max_size=max_size,
+        exposure=0.0,
+        input_color_space="sRGB",
+        input_cctf_decoding=False,
+    )
+    with _silence_stdout():
+        result = run_simulation(image, runtime_params, "preview")
+    png, width, height = _result_to_png(result)
+    payload = {
+        "film_profile": film,
+        "print_profile": paper,
+        "width": width,
+        "height": height,
+        "mime": "image/png",
+        "png_base64": base64.b64encode(png).decode("ascii"),
+    }
+    _THUMB_CACHE[key] = payload
+    return {**payload, "cached": False}
+
+
+def stock_thumb_cmd(params: dict) -> dict:
+    """One developed thumbnail for a film and print pair.
+
+    Neutral exposure and filters, ``preview_mode`` on. Repeated pairs are
+    served from memory.
+    """
+    film = str(params.get("film_profile") or "kodak_portra_400")
+    paper = str(params.get("print_profile") or "kodak_portra_endura")
+    max_size = _clamp_int(params.get("max_size"), default=96, lo=32, hi=160)
+    return _render_stock_thumb(film, paper, max_size)
+
+
+def preview_thumbnails_cmd(params: dict) -> dict:
+    """Develop a strip of thumbnails.
+
+    ``kind: "film"`` varies the stock and holds ``print_profile``.
+    ``kind: "print"`` varies the paper and holds ``film_profile``.
+    ``ids`` limits the list; omit it to use every profile of that kind.
+    """
+    kind = str(params.get("kind") or "film")
+    max_size = _clamp_int(params.get("max_size"), default=96, lo=32, hi=160)
+    requested = params.get("ids")
+    if requested is None:
+        ids = [item["id"] for item in list_profiles_cmd({"kind": kind})["profiles"]]
+    elif isinstance(requested, list) and all(isinstance(item, str) and item for item in requested):
+        ids = requested
+    else:
+        raise ValueError("ids must be a list of profile id strings")
+
+    if kind == "film":
+        paper = str(params.get("print_profile") or "kodak_portra_endura")
+        thumbs = [_render_stock_thumb(film_id, paper, max_size) for film_id in ids]
+        return {"kind": "film", "print_profile": paper, "max_size": max_size, "thumbs": thumbs}
+    if kind == "print":
+        film = str(params.get("film_profile") or "kodak_portra_400")
+        thumbs = [_render_stock_thumb(film, paper_id, max_size) for paper_id in ids]
+        return {"kind": "print", "film_profile": film, "max_size": max_size, "thumbs": thumbs}
+    raise ValueError("kind must be 'film' or 'print'")
+
+
 def preview_cmd(params: dict) -> dict:
     """Run one preview or scan through the existing runtime.
 
@@ -615,6 +708,10 @@ def dispatch(request: dict) -> dict:
             result = import_raw_cmd(params)
         elif method == "preview":
             result = preview_cmd(params)
+        elif method == "stock_thumb":
+            result = stock_thumb_cmd(params)
+        elif method == "preview_thumbnails":
+            result = preview_thumbnails_cmd(params)
         else:
             return _error(request_id, "unknown_method", f"unknown method {method!r}")
         return _ok(request_id, result)

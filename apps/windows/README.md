@@ -23,6 +23,7 @@ The image-first layout — film strip, easel, inspector — is described in [`DE
 - Preview and scan: `init_params`, then `simulate_preview` or `simulate`. Preview turns on `settings.preview_mode`. Scan leaves it off so grain and the other preview-mode cuts stay available. Both still resize to the size control.
 - Exposure compensation, enlarger yellow/magenta filter shifts, and the high-level halation and scatter amount/size controls. Those are existing runtime fields.
 - A built-in linear chart, a linear image path (`load_image_oiio`), or a camera RAW. RAW import calls `load_and_process_raw_file` (rawpy) with the same white-balance modes as the Qt GUI: as shot, daylight, tungsten, and custom temperature plus tint. The demosaiced buffer stays in the sidecar and is reused until the file or white balance changes.
+- Strip thumbnails (`stock_thumb`, `preview_thumbnails`). Each tile is that same chart developed with `preview_mode` at a 96px long edge, for one film and one paper, at neutral exposure and filters. The sidecar keeps the PNG in memory. The film strip refreshes when the paper changes, and the paper strip refreshes when the film changes. A cold pass is one small preview per pair. It does not rerun when exposure, the filters, or the loaded frame change.
 
 The README at the repo root still shows `create_params`. In this tree the function is `init_params` (see `src/spektrafilm/runtime/params_builder.py`). The sidecar uses `init_params`.
 

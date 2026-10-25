@@ -261,6 +261,40 @@ The first preview can take a while: Numba compiles on first use, and the
 spectral pipeline is per pixel. Keep `max_size` small. RAW demosaic is a
 separate cost and happens on import or on a cache miss.
 
+### `stock_thumb`
+
+One developed thumbnail of the built-in linear chart for a film and a paper.
+Exposure and the enlarger filters stay neutral. `settings.preview_mode` is on.
+The long edge defaults to 96 and is clamped to 32–160. The chart is scaled
+with nearest neighbors up to that edge so the patches stay flat.
+
+```json
+{"id": 11, "method": "stock_thumb", "params": {"film_profile": "kodak_portra_400", "print_profile": "kodak_portra_endura", "max_size": 96}}
+```
+
+The result carries `film_profile`, `print_profile`, `width`, `height`, `mime`,
+`png_base64`, and `cached`. A repeated pair with the same `max_size` is served
+from memory and does not call `simulate` again.
+
+### `preview_thumbnails`
+
+The same render, for a strip.
+
+- `kind: "film"` holds `print_profile` and varies each film id.
+- `kind: "print"` holds `film_profile` and varies each paper id.
+- `ids` is optional. Omit it to use every profile of that kind.
+
+```json
+{"id": 12, "method": "preview_thumbnails", "params": {"kind": "film", "print_profile": "kodak_portra_endura", "ids": ["kodak_portra_400", "kodak_gold_200"], "max_size": 96}}
+```
+
+The result is `{kind, print_profile or film_profile, max_size, thumbs: [...]}`.
+Each thumb has the `stock_thumb` fields. The shell asks for one thumb at a
+time so the strip can fill in as each frame finishes. Requests are still
+serialized. A cold catalog is one preview-mode chart per pair. Changing the
+paper rebuilds the film strip; changing the film rebuilds the paper strip.
+Exposure, filters, halation, and the loaded frame do not invalidate the cache.
+
 ## Manual check
 
 From the repository root, with Python 3.13 and the package installed

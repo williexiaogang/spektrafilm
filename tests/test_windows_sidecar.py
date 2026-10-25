@@ -266,3 +266,103 @@ def test_raw_cache_and_scan_params_when_runtime_imports(tmp_path):
         server.load_raw_image = original_load
         server.run_simulation = original_run
         server._RAW_CACHE = None
+
+
+def test_stock_thumb_is_cached_and_preview_thumbnails_varies_one_axis():
+    try:
+        server.ensure_import_path()
+        from spektrafilm import init_params  # noqa: F401
+    except Exception as exc:
+        pytest.skip(f"spektrafilm runtime dependencies are not installed: {exc}")
+
+    calls = {"count": 0}
+
+    def fake_simulate(image, params, render_mode):
+        calls["count"] += 1
+        assert render_mode == "preview"
+        assert params.settings.preview_mode is True
+        assert params.camera.exposure_compensation_ev == 0.0
+        return image
+
+    original = server.run_simulation
+    server.run_simulation = fake_simulate
+    server._THUMB_CACHE.clear()
+    try:
+        bad_kind = server.dispatch(
+            {"id": 1, "method": "preview_thumbnails", "params": {"kind": "lens", "ids": ["kodak_portra_400"]}}
+        )
+        assert bad_kind["ok"] is False
+        assert "kind" in bad_kind["error"]["message"]
+
+        missing = server.dispatch(
+            {
+                "id": 2,
+                "method": "stock_thumb",
+                "params": {
+                    "film_profile": "not_a_stock",
+                    "print_profile": "kodak_portra_endura",
+                    "max_size": 48,
+                },
+            }
+        )
+        assert missing["ok"] is False
+        assert calls["count"] == 0
+
+        first = server.dispatch(
+            {
+                "id": 3,
+                "method": "stock_thumb",
+                "params": {
+                    "film_profile": "kodak_portra_400",
+                    "print_profile": "kodak_portra_endura",
+                    "max_size": 64,
+                },
+            }
+        )
+        assert first["ok"] is True, first
+        assert first["result"]["cached"] is False
+        assert first["result"]["width"] >= 64
+        png = __import__("base64").b64decode(first["result"]["png_base64"])
+        assert png.startswith(b"\x89PNG\r\n\x1a\n")
+        assert calls["count"] == 1
+
+        again = server.dispatch(
+            {
+                "id": 4,
+                "method": "stock_thumb",
+                "params": {
+                    "film_profile": "kodak_portra_400",
+                    "print_profile": "kodak_portra_endura",
+                    "max_size": 64,
+                },
+            }
+        )
+        assert again["ok"] is True
+        assert again["result"]["cached"] is True
+        assert again["result"]["png_base64"] == first["result"]["png_base64"]
+        assert calls["count"] == 1
+
+        batch = server.dispatch(
+            {
+                "id": 5,
+                "method": "preview_thumbnails",
+                "params": {
+                    "kind": "print",
+                    "film_profile": "kodak_portra_400",
+                    "ids": ["kodak_portra_endura", "kodak_supra_endura"],
+                    "max_size": 64,
+                },
+            }
+        )
+        assert batch["ok"] is True, batch
+        thumbs = batch["result"]["thumbs"]
+        assert [item["print_profile"] for item in thumbs] == [
+            "kodak_portra_endura",
+            "kodak_supra_endura",
+        ]
+        assert thumbs[0]["cached"] is True
+        assert thumbs[1]["cached"] is False
+        assert calls["count"] == 2
+    finally:
+        server.run_simulation = original
+        server._THUMB_CACHE.clear()

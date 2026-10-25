@@ -11,6 +11,8 @@
     "allow-list-print-profiles",
     "allow-import-raw",
     "allow-run-preview",
+    "allow-stock-thumb",
+    "allow-preview-thumbnails",
     "dialog:allow-open"
   ]
 }

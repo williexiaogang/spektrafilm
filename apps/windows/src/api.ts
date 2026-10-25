@@ -162,8 +162,26 @@ export function listPrintProfiles(): Promise<ProfileList> {
   return call<ProfileList>("list_print_profiles");
 }
 
+export type StockThumb = {
+  film_profile: string;
+  print_profile: string;
+  width: number;
+  height: number;
+  mime: string;
+  png_base64: string;
+  cached: boolean;
+};
+
 export function runPreview(params: PreviewRequest): Promise<PreviewResult> {
   return call<PreviewResult>("run_preview", { params });
+}
+
+export function stockThumb(params: {
+  film_profile: string;
+  print_profile: string;
+  max_size?: number;
+}): Promise<StockThumb> {
+  return call<StockThumb>("stock_thumb", { params });
 }
 
 export function importRaw(params: RawImportRequest): Promise<RawImport> {
