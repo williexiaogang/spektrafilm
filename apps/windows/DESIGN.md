@@ -9,4 +9,6 @@ Public editors such as [Fotufilm Engine](https://fotufilm.com/documentation.html
 - **Inspector.** One narrow column holds exposure, the yellow and magenta filters, halation, preview or scan, and the file or RAW fields for the source in use. Drag its edge to resize. Double-click, or Home, restores the default width.
 - **Type and color.** Newsreader and IBM Plex Mono (SIL OFL 1.1, see `src/fonts/OFL.txt`) carry the wordmark and the figures. The emulsion black, dye cyan / magenta / yellow, and brass expose plate stay. They belong to this shell.
 
-Motion is a safelight sweep while a render runs, and a short fade when a print appears. `prefers-reduced-motion` turns both off. Focus is a yellow ring.
+Motion is a safelight sweep while a render runs, a short fade when a print appears, and a small press on Expose and on a stock frame. `prefers-reduced-motion` turns those off. Focus is a yellow ring.
+
+A later polish pass tightened the same layout. The film row is one strip: sprocket holes, frames set close, a brass tick on the selected stock, and left/right keys once a frame is focused. A stale print dims and takes a brass mat; a matching print stays full and quiet. Hold sits on the picture as a corner control. Exposure, filters, and halation share one inset group. The swatches are still original color studies with a small chart drawn in the frame, not per-stock simulations.

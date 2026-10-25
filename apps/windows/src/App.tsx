@@ -1,6 +1,12 @@
 /* SpektraFilm Windows edition — GPLv3. See LICENSE in the repository root. */
 
-import { useEffect, useMemo, useState, type PointerEvent as ReactPointerEvent } from "react";
+import {
+  useEffect,
+  useMemo,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import {
   formatErr,
   importRaw,
@@ -437,7 +443,7 @@ export default function App() {
       >
         <main className="stage">
           <div
-            className={`frame ${busy ? "busy" : ""} ${preview ? "holding" : ""} ${comparing ? "comparing" : ""}`}
+            className={`frame ${busy ? "busy" : ""} ${preview ? "holding" : ""} ${comparing ? "comparing" : ""} ${stale ? "is-stale" : ""}`}
             onPointerDown={() => holdCompare(true)}
             onPointerUp={() => holdCompare(false)}
             onPointerLeave={() => holdCompare(false)}
@@ -451,6 +457,7 @@ export default function App() {
             </div>
             {preview && viewPng ? (
               <img
+                key={comparing ? "reference" : String(shownId ?? "print")}
                 alt={comparing ? "Scene before development" : "Developed preview"}
                 src={`data:${preview.mime};base64,${viewPng}`}
                 style={{ imageRendering: preview.width < 200 ? "pixelated" : "auto" }}
@@ -460,6 +467,27 @@ export default function App() {
             )}
             {busy ? <div className="sweep" /> : null}
             {comparing ? <span className="compare-tag">Original</span> : null}
+            {canCompare ? (
+              <button
+                type="button"
+                className={`hold ${comparing ? "on" : ""}`}
+                title="Hold to compare the scene before development"
+                onPointerDown={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  holdCompare(true);
+                }}
+                onPointerUp={(event) => {
+                  event.stopPropagation();
+                  holdCompare(false);
+                }}
+                onPointerLeave={() => holdCompare(false)}
+                onPointerCancel={() => holdCompare(false)}
+              >
+                <CompareIcon />
+                Hold
+              </button>
+            ) : null}
             <p className="rebate">
               <span className="rebate-id">SF</span>
               <span className="name">{captionFor(preview, sourceMode, rawPath, imagePath)}</span>
@@ -467,26 +495,8 @@ export default function App() {
                 <span className="stale" title="The easel does not match the controls">
                   Stale
                 </span>
-              ) : null}
-              {canCompare ? (
-                <button
-                  type="button"
-                  className={`hold ${comparing ? "on" : ""}`}
-                  title="Hold to compare the scene before development"
-                  onPointerDown={(event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    holdCompare(true);
-                  }}
-                  onPointerUp={(event) => {
-                    event.stopPropagation();
-                    holdCompare(false);
-                  }}
-                  onPointerLeave={() => holdCompare(false)}
-                  onPointerCancel={() => holdCompare(false)}
-                >
-                  Hold
-                </button>
+              ) : preview ? (
+                <span className="fresh" title="The easel matches the controls" />
               ) : null}
             </p>
           </div>
@@ -546,7 +556,7 @@ export default function App() {
           {runError ? <p className="error">{runError}</p> : null}
           {bootError && phase !== "ready" ? <p className="error">{bootError}</p> : null}
 
-          <section>
+          <section className="cluster">
             <h2 title="camera.exposure_compensation_ev">Exposure</h2>
             <Slider
               label="EV"
@@ -561,7 +571,7 @@ export default function App() {
             />
           </section>
 
-          <section>
+          <section className="cluster">
             <h2 title="enlarger.y_filter_shift and enlarger.m_filter_shift">Filters</h2>
             <Slider
               label="Yellow"
@@ -589,7 +599,7 @@ export default function App() {
             />
           </section>
 
-          <section>
+          <section className="cluster">
             <h2 title="film_render.halation">Halation</h2>
             <div className="chips" role="group" aria-label="Halation">
               <button
@@ -821,29 +831,55 @@ function StockStrip({
   disabled: boolean;
   onSelect: (id: string) => void;
 }) {
+  function onKey(event: ReactKeyboardEvent<HTMLButtonElement>) {
+    if (disabled || (event.key !== "ArrowLeft" && event.key !== "ArrowRight")) {
+      return;
+    }
+    event.preventDefault();
+    const index = Math.max(0, profiles.findIndex((profile) => profile.id === selected));
+    const nextIndex =
+      event.key === "ArrowRight" ? Math.min(profiles.length - 1, index + 1) : Math.max(0, index - 1);
+    const next = profiles[nextIndex];
+    if (!next || next.id === selected) {
+      return;
+    }
+    onSelect(next.id);
+    const sibling = event.currentTarget.parentElement?.querySelector<HTMLButtonElement>(
+      `[data-stock="${CSS.escape(next.id)}"]`,
+    );
+    sibling?.focus();
+    sibling?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }
+
   return (
     <div className={`strip ${kind}`} role="group" aria-label={label}>
       <span className="strip-label">{label}</span>
       <div className="strip-scroll">
-        {profiles.map((profile) => (
-          <button
-            key={profile.id}
-            type="button"
-            className={`tile ${selected === profile.id ? "on" : ""}`}
-            disabled={disabled}
-            title={profile.name}
-            aria-pressed={selected === profile.id}
-            onClick={() => onSelect(profile.id)}
-          >
-            <span
-              className="swatch"
-              style={{ background: kind === "film" ? filmSwatch(profile.id) : paperSwatch(profile.id) }}
+        {profiles.map((profile) => {
+          const on = selected === profile.id;
+          return (
+            <button
+              key={profile.id}
+              type="button"
+              className={`tile ${on ? "on" : ""}`}
+              data-stock={profile.id}
+              disabled={disabled}
+              title={profile.name}
+              aria-pressed={on}
+              tabIndex={disabled ? -1 : on ? 0 : -1}
+              onKeyDown={onKey}
+              onClick={() => onSelect(profile.id)}
             >
-              {kind === "film" ? <i className="chartlet" aria-hidden="true" /> : null}
-            </span>
-            <span className="cap">{shortStock(profile.name)}</span>
-          </button>
-        ))}
+              <span
+                className="swatch"
+                style={{ background: kind === "film" ? filmSwatch(profile.id) : paperSwatch(profile.id) }}
+              >
+                {kind === "film" ? <i className="chartlet" aria-hidden="true" /> : null}
+              </span>
+              <span className="cap">{shortStock(profile.name)}</span>
+            </button>
+          );
+        })}
       </div>
     </div>
   );
@@ -868,6 +904,15 @@ function DyeMark() {
       <path d="M11 26 L20 8 L23 8 L14 26 Z" fill="#c56b78" />
       <path d="M18 26 L24 12 L27 12 L21 26 Z" fill="#e2b15a" />
       <rect x="4" y="28" width="26" height="2" fill="#f6efe2" opacity="0.85" />
+    </svg>
+  );
+}
+
+function CompareIcon() {
+  return (
+    <svg className="chip-icon" viewBox="0 0 16 16" aria-hidden="true">
+      <rect x="1.5" y="3.5" width="8" height="8" fill="none" stroke="currentColor" strokeWidth="1.2" />
+      <rect x="6.5" y="4.5" width="8" height="8" fill="currentColor" opacity="0.35" />
     </svg>
   );
 }
@@ -947,21 +992,29 @@ function Slider({
 }
 
 function EmptyStage() {
+  const holes = Array.from({ length: 14 }, (_, index) => 16 + index * 21);
   return (
     <div className="empty">
-      <svg className="gate-drawing" viewBox="0 0 240 140" aria-hidden="true">
-        <rect x="18" y="22" width="204" height="96" fill="#0c0b09" stroke="#5c5348" />
-        <rect x="196" y="22" width="26" height="96" fill="url(#fog)" />
+      <svg className="gate-drawing" viewBox="0 0 320 180" aria-hidden="true">
+        <rect width="320" height="180" fill="#0c0b09" />
+        {holes.map((x) => (
+          <rect key={`t${x}`} x={x} y="6" width="8" height="6" rx="1" fill="#241e18" />
+        ))}
+        {holes.map((x) => (
+          <rect key={`b${x}`} x={x} y="168" width="8" height="6" rx="1" fill="#241e18" />
+        ))}
+        <rect x="36" y="28" width="248" height="124" fill="#070605" stroke="#3a322a" />
+        <rect x="248" y="28" width="36" height="124" fill="url(#fog)" />
         <defs>
           <linearGradient id="fog" x1="0" x2="1">
             <stop offset="0" stopColor="#6fafa8" stopOpacity="0" />
-            <stop offset="0.45" stopColor="#6fafa8" stopOpacity="0.55" />
-            <stop offset="0.72" stopColor="#c56b78" stopOpacity="0.5" />
-            <stop offset="1" stopColor="#e2b15a" stopOpacity="0.75" />
+            <stop offset="0.45" stopColor="#6fafa8" stopOpacity="0.45" />
+            <stop offset="0.72" stopColor="#c56b78" stopOpacity="0.4" />
+            <stop offset="1" stopColor="#e2b15a" stopOpacity="0.7" />
           </linearGradient>
         </defs>
       </svg>
-      <p>Easel clear</p>
+      <p>Unexposed</p>
     </div>
   );
 }
