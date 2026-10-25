@@ -1,0 +1,48 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "SpektraFilm",
+  "version": "0.3.4",
+  "identifier": "app.spektrafilm.windows",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "SpektraFilm",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 1100,
+        "minHeight": 720,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis", "msi"],
+    "publisher": "SpektraFilm contributors",
+    "copyright": "Copyright SpektraFilm contributors. Licensed under the GNU GPL v3.",
+    "shortDescription": "Spectral film simulation",
+    "longDescription": "Windows desktop shell for SpektraFilm. The physical simulation stays in the Python runtime. GPLv3.",
+    "resources": {
+      "../sidecar/server.py": "sidecar/server.py",
+      "../sidecar/PROTOCOL.md": "sidecar/PROTOCOL.md"
+    },
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.png",
+      "icons/icon.ico"
+    ]
+  }
+}

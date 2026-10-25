@@ -190,3 +190,6 @@ uv.lock
 
 # claude
 .claude
+
+# Windows Tauri shell
+node_modules/

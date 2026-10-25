@@ -1,5 +1,9 @@
 # spektrafilm_gui — interactive shell
 
+The Qt + napari application in this package remains the cross-platform research GUI.
+The Windows desktop edition (Tauri 2 + web UI + Python sidecar) lives in
+[`apps/windows`](../../apps/windows) and does not replace this package.
+
 The user-facing interactive application: image preview, parameter widgets, profile management, animation, exports.
 
 ## Philosophy
