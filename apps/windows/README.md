@@ -14,6 +14,8 @@ apps/windows/
 
 On launch the Rust shell starts `python -u sidecar/server.py`, then the UI asks it to list film and print profiles and to run one preview. Requests are newline-delimited JSON. There is no network port.
 
+The bench layout — enlarger stations, easel, densitometer log — is described in [`DESIGN.md`](DESIGN.md).
+
 ## What this shell does
 
 - Health and version.

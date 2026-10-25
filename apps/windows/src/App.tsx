@@ -311,13 +311,9 @@ export default function App() {
 
   return (
     <div className="app">
-      <header className="topbar">
+      <header className="mast">
         <div className="brand">
-          <span className="mark" aria-hidden="true">
-            <i />
-            <i />
-            <i />
-          </span>
+          <DyeMark />
           <div>
             <p className="wordmark">SpektraFilm</p>
             <p className="edition">Windows edition</p>
@@ -328,7 +324,7 @@ export default function App() {
 
       <div className="workspace">
         <aside className="panel left-panel">
-          <section>
+          <section className="station">
             <h2>Film</h2>
             <label className="field">
               <span title="Film stock passed to init_params">Stock</span>
@@ -351,7 +347,7 @@ export default function App() {
             ) : null}
           </section>
 
-          <section>
+          <section className="station">
             <h2>Print</h2>
             <label className="field">
               <span title="Print paper passed to init_params">Paper</span>
@@ -370,7 +366,7 @@ export default function App() {
             </label>
           </section>
 
-          <section>
+          <section className="station">
             <h2>Exposure</h2>
             <Slider
               label="Compensation"
@@ -385,11 +381,12 @@ export default function App() {
             />
           </section>
 
-          <section>
+          <section className="station">
             <h2>Enlarger</h2>
             <Slider
               label="Yellow filter"
               title="enlarger.y_filter_shift, Kodak CC steps from neutral"
+              tone="yellow"
               min={-80}
               max={80}
               step={1}
@@ -401,6 +398,7 @@ export default function App() {
             <Slider
               label="Magenta filter"
               title="enlarger.m_filter_shift, Kodak CC steps from neutral"
+              tone="magenta"
               min={-80}
               max={80}
               step={1}
@@ -411,7 +409,7 @@ export default function App() {
             />
           </section>
 
-          <section>
+          <section className="station">
             <h2>Halation</h2>
             <label className="check" title="film_render.halation.active">
               <input
@@ -425,6 +423,7 @@ export default function App() {
             <Slider
               label="Scatter"
               title="film_render.halation.scatter_amount. 1 matches the stock model."
+              tone="heat"
               min={0}
               max={2}
               step={0.05}
@@ -436,6 +435,7 @@ export default function App() {
             <Slider
               label="Scatter size"
               title="film_render.halation.scatter_spatial_scale"
+              tone="heat"
               min={0}
               max={2}
               step={0.05}
@@ -447,6 +447,7 @@ export default function App() {
             <Slider
               label="Halation"
               title="film_render.halation.halation_amount"
+              tone="heat"
               min={0}
               max={2}
               step={0.05}
@@ -458,6 +459,7 @@ export default function App() {
             <Slider
               label="Halation size"
               title="film_render.halation.halation_spatial_scale"
+              tone="heat"
               min={0}
               max={2}
               step={0.05}
@@ -468,7 +470,7 @@ export default function App() {
             />
           </section>
 
-          <section>
+          <section className="station">
             <h2>Develop</h2>
             <div className="segmented" role="group" aria-label="Render mode">
               <button
@@ -511,7 +513,7 @@ export default function App() {
             <p className="hint">Scan keeps grain and blur. Both modes resize to this long edge.</p>
           </section>
 
-          <section>
+          <section className="station">
             <h2>Source</h2>
             <div className="segmented three" role="group" aria-label="Preview source">
               <button
@@ -572,6 +574,7 @@ export default function App() {
                 <Slider
                   label="Temperature"
                   title="Kelvin. Used only for custom white balance."
+                  tone="kelvin"
                   min={2500}
                   max={9000}
                   step={50}
@@ -583,6 +586,7 @@ export default function App() {
                 <Slider
                   label="Tint"
                   title="Green-channel multiplier. 1 is neutral. Used only for custom white balance."
+                  tone="magenta"
                   min={0.7}
                   max={1.3}
                   step={0.01}
@@ -646,7 +650,13 @@ export default function App() {
         </aside>
 
         <main className="stage">
-          <div className={`frame ${busy ? "busy" : ""}`}>
+          <div className={`frame ${busy ? "busy" : ""} ${preview ? "holding" : ""}`}>
+            <div className="marks" aria-hidden="true">
+              <i />
+              <i />
+              <i />
+              <i />
+            </div>
             {preview ? (
               <img
                 alt="Simulation preview"
@@ -656,16 +666,17 @@ export default function App() {
             ) : (
               <EmptyStage />
             )}
-            {busy ? <div className="progress" /> : null}
+            {busy ? <div className="sweep" /> : null}
           </div>
-          <p className="caption">
-            <span>{captionFor(preview, sourceMode, rawPath, imagePath)}</span>
+          <p className="rebate">
+            <span className="rebate-id">SF</span>
+            <span className="name">{captionFor(preview, sourceMode, rawPath, imagePath)}</span>
             {stale ? <span className="stale">Settings changed</span> : null}
           </p>
         </main>
 
         <aside className="panel right-panel">
-          <section>
+          <section className="log">
             <h2>Status</h2>
             <p className={`job ${job.tone}`}>{job.text}</p>
             <MetaRow label="Mode" value={preview ? titleCase(preview.render_mode) : titleCase(renderMode)} />
@@ -679,7 +690,7 @@ export default function App() {
             />
           </section>
 
-          <section>
+          <section className="log">
             <h2>RAW</h2>
             <MetaRow label="File" value={fileName(rawInfo?.path ?? (sourceMode === "raw" ? rawPath : ""))} />
             <MetaRow
@@ -691,7 +702,7 @@ export default function App() {
             <MetaRow label="Input" value={rawInfo?.input_color_space ?? "—"} />
           </section>
 
-          <section>
+          <section className="log">
             <h2>Preview</h2>
             <MetaRow label="Film" value={nameFor(films, preview?.film_profile)} />
             <MetaRow label="Paper" value={nameFor(papers, preview?.print_profile)} />
@@ -710,7 +721,7 @@ export default function App() {
             <MetaRow label="Output" value={preview?.output_color_space ?? "sRGB"} />
           </section>
 
-          <section>
+          <section className="log">
             <h2>Sidecar</h2>
             <MetaRow label="Status" value={phaseLabel(phase)} />
             <MetaRow label="Python" value={health?.python ?? version?.python ?? "—"} />
@@ -732,10 +743,22 @@ function StatusPill({ phase, job }: { phase: Phase; job: Job }) {
   const tone = job.tone === "running" ? "booting" : job.tone === "error" ? "error" : phase;
   const label = job.tone === "running" || job.tone === "error" ? job.text : phaseLabel(phase);
   return (
-    <p className={`pill ${tone}`} title={job.text}>
-      <span />
-      {label.length > 42 ? `${label.slice(0, 40)}…` : label}
+    <p className={`lamp ${tone}`} title={job.text}>
+      <i aria-hidden="true" />
+      <span>{label.length > 42 ? `${label.slice(0, 40)}…` : label}</span>
     </p>
+  );
+}
+
+function DyeMark() {
+  return (
+    <svg className="mark" viewBox="0 0 34 34" aria-hidden="true">
+      <rect width="34" height="34" fill="#100e0c" />
+      <path d="M4 26 L17 6 L20 6 L7 26 Z" fill="#6fafa8" />
+      <path d="M11 26 L20 8 L23 8 L14 26 Z" fill="#c56b78" />
+      <path d="M18 26 L24 12 L27 12 L21 26 Z" fill="#e2b15a" />
+      <rect x="4" y="28" width="26" height="2" fill="#f6efe2" opacity="0.85" />
+    </svg>
   );
 }
 
@@ -758,6 +781,7 @@ function Slider({
   display,
   disabled,
   onChange,
+  tone = "neutral",
 }: {
   label: string;
   title: string;
@@ -768,7 +792,12 @@ function Slider({
   display: string;
   disabled: boolean;
   onChange: (value: number) => void;
+  tone?: "neutral" | "yellow" | "magenta" | "heat" | "kelvin";
 }) {
+  const span = max - min;
+  const pct = span === 0 ? 0 : ((value - min) / span) * 100;
+  const ink =
+    tone === "magenta" ? "#c56b78" : tone === "heat" ? "#d07a62" : tone === "yellow" ? "#e2b15a" : "#c9964a";
   return (
     <label className={`field ${disabled ? "is-off" : ""}`}>
       <span className="split" title={title}>
@@ -777,12 +806,14 @@ function Slider({
       </span>
       <input
         type="range"
+        className={tone === "kelvin" ? "tone-kelvin" : undefined}
         min={min}
         max={max}
         step={step}
         value={value}
         disabled={disabled}
         aria-label={label}
+        style={{ ["--fill" as string]: `${pct}%`, ["--ink" as string]: ink }}
         onChange={(event) => onChange(Number(event.target.value))}
       />
     </label>
@@ -792,16 +823,27 @@ function Slider({
 function EmptyStage() {
   return (
     <div className="empty">
-      <div className="swatches" aria-hidden="true">
-        <i />
-        <i />
-        <i />
-        <i />
-        <i />
-        <i />
-      </div>
-      <p>Develop a preview</p>
-      <span>Open a RAW file or use the built-in chart.</span>
+      <svg className="gate-drawing" viewBox="0 0 240 140" aria-hidden="true">
+        <rect x="8" y="16" width="224" height="108" fill="#16130f" stroke="#3a322a" />
+        {Array.from({ length: 8 }, (_, index) => (
+          <rect key={`t${index}`} x={22 + index * 26} y="6" width="10" height="8" rx="1" fill="#2a241c" />
+        ))}
+        {Array.from({ length: 8 }, (_, index) => (
+          <rect key={`b${index}`} x={22 + index * 26} y="126" width="10" height="8" rx="1" fill="#2a241c" />
+        ))}
+        <rect x="36" y="32" width="168" height="76" fill="#0c0b09" stroke="#5c5348" />
+        <rect x="188" y="32" width="16" height="76" fill="url(#fog)" />
+        <defs>
+          <linearGradient id="fog" x1="0" x2="1">
+            <stop offset="0" stopColor="#6fafa8" stopOpacity="0" />
+            <stop offset="0.45" stopColor="#6fafa8" stopOpacity="0.55" />
+            <stop offset="0.72" stopColor="#c56b78" stopOpacity="0.5" />
+            <stop offset="1" stopColor="#e2b15a" stopOpacity="0.75" />
+          </linearGradient>
+        </defs>
+      </svg>
+      <p>The easel is clear</p>
+      <span>Expose the chart, a linear file, or a camera RAW.</span>
     </div>
   );
 }
