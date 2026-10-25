@@ -56,11 +56,17 @@ No runtime import. Use this to confirm the process is speaking the protocol.
 {
   "status": "ok",
   "sidecar": "spektrafilm-windows",
-  "sidecar_version": "0.1.0",
+  "sidecar_version": "0.3.0",
   "protocol": 1,
-  "python": "3.13.0"
+  "python": "3.13.17",
+  "executable": "C:\\Users\\you\\AppData\\Local\\SpektraFilm\\python\\python.exe",
+  "bundled": true
 }
 ```
+
+`bundled` is true when the shell started its private runtime (`SPEKTRAFILM_BUNDLED=1`).
+A development `tauri dev` session leaves it false and `executable` is the
+system interpreter. `executable` is the path of that process.
 
 ### `version`
 

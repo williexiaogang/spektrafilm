@@ -6,6 +6,8 @@ export type Health = {
   sidecar_version: string;
   protocol: number;
   python: string;
+  executable?: string;
+  bundled?: boolean;
 };
 
 export type VersionInfo = {
