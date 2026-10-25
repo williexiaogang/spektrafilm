@@ -255,6 +255,11 @@ expectation as the Qt file loader.
 
 `raw_cache` is `hit`, `miss`, or `null` (not a RAW source).
 
+RAW cache identity includes the resolved path, file size and modification/change
+timestamps, plus white balance, lens settings, and working color space. Replacing
+or modifying a RAW at the same path invalidates its decoded image on the next
+request. A file changed during import is not treated as the newer file's cache.
+
 `reference_png_base64` is the same frame before simulation, resized to `max_size`, transformed from the input RGB space/white point to sRGB, and encoded with the sRGB transfer function so the shell can hold-to-compare. `input_cctf_decoding` is respected. This includes conversion from ProPhoto RGB for the default RAW import. It is not a second print. It is `null` if that view could not be encoded.
 
 The first preview can take a while: Numba compiles on first use, and the

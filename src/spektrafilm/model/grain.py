@@ -50,18 +50,27 @@ def layer_particle_model(density,
         grain = fast_gaussian_filter(grain, blur_particle*np.sqrt(od_particle))
     return grain
 
-def add_micro_structure(density_cmy_out, micro_structure, pixel_size_um):
+def add_micro_structure(density_cmy_out, micro_structure, pixel_size_um, rng=None):
     grain_micro_structure_blur_pixel = micro_structure[0]/pixel_size_um
     grain_micro_structure_sigma = micro_structure[1]*0.001/pixel_size_um  # grain microstructure[1] is in nm
     if grain_micro_structure_sigma > 0.05:
-        clumping = fast_lognormal_from_mean_std(np.ones_like(density_cmy_out),
+        if rng is None:
+            clumping = fast_lognormal_from_mean_std(np.ones_like(density_cmy_out),
                                                 np.ones_like(density_cmy_out)*grain_micro_structure_sigma)
+        else:
+            log_variance = np.log1p(grain_micro_structure_sigma**2)
+            clumping = rng.lognormal(-0.5*log_variance, np.sqrt(log_variance), size=density_cmy_out.shape)
         if grain_micro_structure_blur_pixel>0.4:
             # clumping = scipy.ndimage.gaussian_filter(clumping, (grain_micro_structure_blur_pixel,
             #                                                     grain_micro_structure_blur_pixel, 0))
             clumping = fast_gaussian_filter(clumping, grain_micro_structure_blur_pixel)
         density_cmy_out *= clumping
     return density_cmy_out
+
+def _grain_channel_seeds(fixed_seed):
+    if fixed_seed is None:
+        return (0, 1, 2)
+    return tuple(int(seed) for seed in np.random.SeedSequence(fixed_seed).generate_state(3))
 
 def apply_grain_to_density(density_cmy,
                            pixel_size_um=10,
@@ -74,6 +83,7 @@ def apply_grain_to_density(density_cmy,
                            n_sub_layers=1,
                            fixed_seed=None,
                            ):
+    """Sample grain; an explicit seed reproduces all channels and sublayers."""
     density_min = np.array(density_min)
     density_max = density_max_curves + density_min
     pixel_area_um2 = pixel_size_um**2
@@ -81,10 +91,7 @@ def apply_grain_to_density(density_cmy,
     n_particles_per_pixel = pixel_area_um2/particle_area_um2
     sigma_blur_pixel = grain_blur
     
-    if fixed_seed is not None:
-        seed = None
-    else:
-        seed = [0, 1, 2]
+    seed = _grain_channel_seeds(fixed_seed)
     
     if n_sub_layers>1:
         n_particles_per_pixel /= n_sub_layers
@@ -97,7 +104,7 @@ def apply_grain_to_density(density_cmy,
                                                             density_max=density_max[ch],
                                                             n_particles_per_pixel=n_particles_per_pixel[ch],
                                                             grain_uniformity=grain_uniformity[ch],
-                                                            seed=seed[ch] + sl*10)
+                                                            seed=(seed[ch] + sl*10) % (2**32))
     density_cmy_out /= n_sub_layers
     density_cmy_out -= density_min
     
@@ -123,6 +130,11 @@ def apply_grain_to_density_layers(density_cmy_layers, # x,y,sublayers,rgb
                                   fixed_seed=None,
                                   use_fast_stats=False,
                                   ):
+    """Sample layered grain and clumping.
+
+    Explicit seeds use scipy sampling and a seeded NumPy clumping generator;
+    Numba's independent parallel RNG is used only without a fixed seed.
+    """
     density_max_total = np.sum(density_max_layers, axis=0) # [sublayers,rgb]
     density_max_fractions = density_max_layers/density_max_total[None,:]
     density_min_layers = density_max_fractions*np.array(density_min)[None,:]
@@ -135,10 +147,7 @@ def apply_grain_to_density_layers(density_cmy_layers, # x,y,sublayers,rgb
     n_particles_per_pixel = pixel_area_um2*density_max_fractions/particle_area_um2_layers
 
     
-    if fixed_seed is not None:
-        seed = None
-    else:
-        seed = [0, 1, 2]
+    seed = _grain_channel_seeds(fixed_seed)
     
     density_cmy_layers += density_min_layers
     density_cmy_out = np.zeros(density_cmy_layers.shape[0:3])
@@ -148,12 +157,17 @@ def apply_grain_to_density_layers(density_cmy_layers, # x,y,sublayers,rgb
                                                             density_max=density_max_layers[sl,ch],
                                                             n_particles_per_pixel=n_particles_per_pixel[sl,ch],
                                                             grain_uniformity=grain_uniformity[ch],
-                                                            seed=seed[ch] + sl*10,
+                                                            seed=(seed[ch] + sl*10) % (2**32),
                                                             blur_particle=grain_blur_dye_clouds_um,
-                                                            use_fast_stats=use_fast_stats)
+                                                            # Numba's parallel RNG is independent of
+                                                            # numpy's seed; use scipy for fixed seeds.
+                                                            use_fast_stats=use_fast_stats and fixed_seed is None)
     
     # micro-structure
-    density_cmy_out = add_micro_structure(density_cmy_out, grain_micro_structure, pixel_size_um)
+    density_cmy_out = add_micro_structure(
+        density_cmy_out, grain_micro_structure, pixel_size_um,
+        rng=np.random.default_rng(fixed_seed) if fixed_seed is not None else None,
+    )
 
     # final
     density_cmy_out -= density_min

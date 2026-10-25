@@ -299,8 +299,13 @@ def _white_balance_settings(params: dict) -> dict:
 
 
 def _raw_fingerprint(path: str, settings: dict) -> tuple:
+    file_path = Path(path).expanduser().resolve()
+    stat = file_path.stat()
     return (
-        str(Path(path).expanduser().resolve()),
+        str(file_path),
+        stat.st_size,
+        stat.st_mtime_ns,
+        stat.st_ctime_ns,
         settings["white_balance"],
         settings["temperature"],
         settings["tint"],
@@ -377,9 +382,10 @@ def import_raw_cmd(params: dict) -> dict:
         raise ValueError("path is required")
     settings = _white_balance_settings(params)
     file_path = _require_raw_file(path_text)
+    fingerprint = _raw_fingerprint(str(file_path), settings)
     image, lens_summary = load_raw_image(str(file_path), settings)
     meta = _raw_meta(file_path, image, settings, lens_summary)
-    _remember_raw(_raw_fingerprint(str(file_path), settings), image, meta)
+    _remember_raw(fingerprint, image, meta)
     return meta
 
 

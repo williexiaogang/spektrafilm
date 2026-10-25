@@ -183,6 +183,8 @@ def _set_color_space_tags(
 ################################################################################
 
 def load_image_oiio(filename):
+    """Read normalized integer pixels or unclipped floating-point pixels."""
+    filename = str(filename)
     # Open the image file
     in_img = oiio.ImageInput.open(filename)
     if not in_img:
@@ -191,33 +193,15 @@ def load_image_oiio(filename):
     try:
         spec = in_img.spec()
         
-        # Determine the native pixel format:
-        # Use "uint16" for PNG and "half" for EXR if applicable.
-        if spec.format == oiio.TypeDesc("uint8"): # for compatibility
-            read_type = oiio.TypeDesc("uint8")
-        elif spec.format == oiio.TypeDesc("uint16"):
-            read_type = oiio.TypeDesc("uint16")
-        elif spec.format == oiio.TypeDesc("half"):
-            read_type = oiio.TypeDesc("half")
-        elif spec.format == oiio.TypeDesc("float"):
-            read_type = oiio.TypeDesc("float")
-        else:
-            # Fallback: use "uint16" by default. You might choose "float" if desired.
-            read_type = oiio.TypeDesc("uint16")
-        
-        # Read the image data using the chosen type
-        pixels = in_img.read_image(read_type)
+        # OIIO normalizes every integer format when converting to float and
+        # preserves negative/above-white values for floating-point sources.
+        pixels = in_img.read_image(oiio.TypeDesc("double"))
         if pixels is None:
             raise Exception("Failed to read image data from " + filename)
         
         # Convert the raw data to a NumPy array and reshape it
-        np_pixels = np.array(pixels)
+        np_pixels = np.asarray(pixels)
         np_pixels = np_pixels.reshape(spec.height, spec.width, spec.nchannels)
-        
-        if spec.format == oiio.TypeDesc("uint16"):
-            np_pixels = np.double(np_pixels)/(2**16-1)
-        if spec.format == oiio.TypeDesc("uint8"):
-            np_pixels = np.double(np_pixels)/(2**8-1)
         
         return np_pixels
     finally:
@@ -276,6 +260,7 @@ def save_image_oiio(
         Whether the pixels carry the color space's encoding transfer
         function. Affects which ICC variant is embedded (encoded vs linear).
     """
+    filename = str(filename)
     # Extract image dimensions and number of channels
     height, width, nchannels = image_data.shape
 
@@ -340,12 +325,20 @@ def save_image_oiio(
     if not out:
         raise IOError("Could not create output image: " + filename)
     
+    if not out.open(filename, spec):
+        raise IOError(f"Could not open output image {filename}: {out.geterror()}")
     try:
-        out.open(filename, spec)
-        # Write the image data; write_image accepts the NumPy array directly.
-        out.write_image(data_to_write)
-    finally:
-        out.close()
+        if not out.write_image(data_to_write):
+            raise IOError(f"Could not write output image {filename}: {out.geterror()}")
+    except BaseException:
+        # Preserve the write error even if closing the failed output also fails.
+        try:
+            out.close()
+        except Exception:
+            pass
+        raise
+    if not out.close():
+        raise IOError(f"Could not close output image {filename}: {out.geterror()}")
 
 ################################################################################
 # Neutral filter values

@@ -9,6 +9,26 @@ from spektrafilm.runtime.params_schema import GrainParams
 
 pytestmark = pytest.mark.unit
 
+def test_fixed_seed_reproduces_single_layer_grain_and_changes_with_the_seed():
+    image = np.full((16, 16, 3), 0.7)
+    def render(seed):
+        return apply_grain_to_density(image.copy(), grain_blur=0.0, n_sub_layers=2, fixed_seed=seed)
+    np.testing.assert_array_equal(render(42), render(42))
+    assert not np.array_equal(render(42), render(43))
+
+
+@pytest.mark.parametrize("use_fast_stats", [False, True])
+def test_fixed_seed_reproduces_sublayers_including_micro_structure(use_fast_stats):
+    image = np.full((12, 12, 3, 3), 0.5)
+    def render(seed):
+        return apply_grain_to_density_layers(
+            image.copy(), np.full((3, 3), 2.0), pixel_size_um=0.5,
+            grain_blur=0.0, grain_blur_dye_clouds_um=0.0,
+            grain_micro_structure=(0.1, 30), fixed_seed=seed, use_fast_stats=use_fast_stats,
+        )
+    np.testing.assert_array_equal(render(42), render(42))
+    assert not np.array_equal(render(42), render(43))
+
 
 class TestApplyGrain:
     def test_apply_grain_returns_input_when_bypassed_or_inactive(self):

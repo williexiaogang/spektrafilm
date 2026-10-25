@@ -32,9 +32,21 @@ class SpectralLUTService:
         self._cached_input_gamut_compress: InputGamutCompressSpec | None = None
         self._enlarger_test_results_memory = None # to test if enlarger LUTs are identical for same input
         self._scanner_test_results_memory = None # to test if scanner LUTs are identical for same input
+        self._enlarger_bounds = None
+        self._scanner_bounds = None
         
         self._cmy_test_values = np.array([[[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]],
                                           [[0.7, 0.8, 0.9], [1.0, 1.1, 1.2]]]) # to test if LUTs are identical
+
+    @property
+    def lut_resolution(self) -> int:
+        return self._lut_resolution
+
+    @staticmethod
+    def _same_bounds(cached, data_min, data_max) -> bool:
+        return cached is not None and (
+            np.array_equal(cached[0], data_min) and np.array_equal(cached[1], data_max)
+        )
 
     def set_hanatos2025_adaptation(self, adaptation: Hanatos2025SensitivityAdaptation) -> None:
         adaptation_copy = self._copy_hanatos2025_adaptation(adaptation)
@@ -106,6 +118,7 @@ class SpectralLUTService:
             self.enlarger_lut_memory is not None
             and self._enlarger_test_results_memory is not None
             and np.array_equal(test_results, self._enlarger_test_results_memory)
+            and self._same_bounds(self._enlarger_bounds, data_min, data_max)
         ):
             data_out, _ = compute_with_lut(cmy_data,
                                            spectral_calculation,
@@ -121,6 +134,7 @@ class SpectralLUTService:
                                              steps=self._lut_resolution)
             self.enlarger_lut_memory = lut
             self._enlarger_test_results_memory = np.array(test_results, copy=True)
+            self._enlarger_bounds = (np.array(data_min, copy=True), np.array(data_max, copy=True))
 
         if data_out is None:
             raise RuntimeError('LUT computation did not produce an output')
@@ -144,6 +158,7 @@ class SpectralLUTService:
             self.scanner_lut_memory is not None
             and self._scanner_test_results_memory is not None
             and np.array_equal(test_results, self._scanner_test_results_memory)
+            and self._same_bounds(self._scanner_bounds, data_min, data_max)
         ):
             data_out, _ = compute_with_lut(cmy_data,
                                            spectral_calculation,
@@ -159,6 +174,7 @@ class SpectralLUTService:
                                              steps=self._lut_resolution)
             self.scanner_lut_memory = lut
             self._scanner_test_results_memory = np.array(test_results, copy=True)
+            self._scanner_bounds = (np.array(data_min, copy=True), np.array(data_max, copy=True))
 
         if data_out is None:
             raise RuntimeError('LUT computation did not produce an output')

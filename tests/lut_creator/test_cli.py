@@ -87,6 +87,26 @@ class TestListSubcommand:
 # ---------------------------------------------------------------------------
 
 class TestBuildSubcommand:
+    @pytest.mark.parametrize("from_toml", [False, True])
+    def test_stops_above_gray_reaches_the_written_bundle(self, tmp_path, from_toml):
+        output = tmp_path / "bundles"
+        args = ["build", "--resolution", "5", "--stops-above-gray", "6", "--out", str(output)]
+        if from_toml:
+            config = tmp_path / "spec.toml"
+            config.write_text(textwrap.dedent('''
+                film_profile = "kodak_portra_400"
+                print_profiles = ["kodak_portra_endura"]
+                input_color_space = "sRGB"
+                output_color_space = "sRGB"
+                stops_above_midgray = 2.0
+            '''), encoding="utf-8")
+            args += ["--from", str(config)]
+        else:
+            args += ["--film", "kodak_portra_400", "--print", "kodak_portra_endura", "--input", "srgb", "--output", "srgb"]
+        assert cli.main(args) == 0
+        metadata = json.loads(next(output.glob("*/bundle.json")).read_text(encoding="utf-8"))
+        assert metadata["params_snapshot"]["kodak_portra_endura"]["stops_above_midgray"] == 6.0
+
     def test_build_with_slugs_creates_bundle(self, tmp_path, capsys):
         rc = cli.main([
             "build",

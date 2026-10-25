@@ -14,6 +14,26 @@ pytestmark = pytest.mark.integration
 
 
 class TestRuntimeApi:
+    def test_update_params_applies_lut_resolution_and_matches_a_fresh_simulator(self, default_params, small_rgb_image):
+        params = copy.deepcopy(default_params)
+        params.settings.use_enlarger_lut = True
+        params.settings.use_scanner_lut = True
+        params.settings.lut_resolution = 5
+        simulator = Simulator(params)
+        simulator.process(small_rgb_image)
+        old_service = simulator._pipeline._lut_service
+        unchanged = copy.deepcopy(params)
+        simulator.update_params(unchanged)
+        assert simulator._pipeline._lut_service is old_service
+
+        updated = copy.deepcopy(params)
+        updated.settings.lut_resolution = 9
+        simulator.update_params(updated)
+        actual = simulator.process(small_rgb_image)
+        expected = Simulator(updated).process(small_rgb_image)
+        assert simulator._pipeline._lut_service.lut_resolution == 9
+        np.testing.assert_allclose(actual, expected, atol=1e-12)
+
     def test_simulate_matches_simulator_process(self, small_rgb_image, default_params):
         new_result = simulate(small_rgb_image, default_params)
         direct_result = Simulator(default_params).process(small_rgb_image)

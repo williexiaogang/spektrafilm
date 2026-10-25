@@ -112,7 +112,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="On-disk packaging (default: directory).",
     )
     build.add_argument(
-        "--stops-above-gray", type=float, metavar="STOPS",
+        "--stops-above-gray", dest="stops_above_midgray", type=float, metavar="STOPS",
         help=(
             "Linear gain placing source encoded 1.0 at "
             "0.18 * 2**STOPS in the film's frame (default: native)."

@@ -62,16 +62,18 @@ def fast_binomial(N_arr, p_arr):
                         approx_int = n_val
                     flat_result[i] = approx_int
                 else:
+                    # Invert the smaller tail. Starting at P(X=0) with p near
+                    # one underflows even when the variance is small.
+                    q_val = min(p_val, 1.0 - p_val)
                     u = np.random.rand()
-                    cdf = 0.0
-                    prob = (1.0 - p_val) ** n_val
+                    prob = (1.0 - q_val) ** n_val
+                    cdf = prob
                     k = 0
-                    while cdf < u and k <= n_val:
-                        cdf += prob
-                        if k < n_val:
-                            prob = prob * ((n_val - k) / (k + 1)) * (p_val / (1.0 - p_val))
+                    while cdf < u and k < n_val:
+                        prob *= ((n_val - k) / (k + 1)) * (q_val / (1.0 - q_val))
                         k += 1
-                    flat_result[i] = k - 1
+                        cdf += prob
+                    flat_result[i] = n_val - k if p_val > 0.5 else k
     return result
 
 @njit(parallel=True, cache=True)

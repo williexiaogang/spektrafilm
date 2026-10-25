@@ -46,7 +46,7 @@ class SimulationPipeline:
         self._last_elapsed_time = None
 
         self._resize_service = ResizingService(self.io, self.camera.film_format_mm)
-        if not update_params:
+        if not update_params or self._lut_service.lut_resolution != self.settings.lut_resolution:
             self._lut_service = SpectralLUTService(self.settings.lut_resolution)
         self._enlarger_service = EnlargerService(self.enlarger)
         self._color_reference_service = ColorReferenceService(self.film, self.film_render,

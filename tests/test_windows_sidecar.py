@@ -27,6 +27,60 @@ def load_server():
 
 server = load_server()
 
+@pytest.mark.parametrize("same_size", [False, True])
+def test_raw_cache_reloads_replaced_files_but_reuses_unchanged_files(tmp_path, monkeypatch, same_size):
+    import os
+    import numpy as np
+
+    path = tmp_path / "frame.dng"
+    path.write_bytes(b"first")
+    loads = []
+
+    def load(path_text, settings):
+        content = Path(path_text).read_bytes()
+        loads.append(content)
+        return np.full((2, 2, 3), len(loads) * 0.1), None
+
+    monkeypatch.setattr(server, "_RAW_CACHE", None)
+    monkeypatch.setattr(server, "load_raw_image", load)
+    request = {"source": "raw", "image_path": str(path)}
+    first = server._resolve_preview_image(request)
+    cached = server._resolve_preview_image(request)
+    assert first["raw_cache"] == "miss"
+    assert cached["raw_cache"] == "hit"
+    assert len(loads) == 1
+
+    previous = path.stat()
+    path.write_bytes(b"other" if same_size else b"replacement raw contents")
+    os.utime(path, ns=(previous.st_atime_ns, previous.st_mtime_ns + 1_000_000_000))
+    replaced = server._resolve_preview_image(request)
+    assert replaced["raw_cache"] == "miss"
+    assert len(loads) == 2
+    assert not np.array_equal(first["image"], replaced["image"])
+    assert server._resolve_preview_image(request)["raw_cache"] == "hit"
+
+
+def test_raw_changed_during_import_is_not_cached_as_the_new_file(tmp_path, monkeypatch):
+    import numpy as np
+
+    path = tmp_path / "frame.dng"
+    path.write_bytes(b"original")
+    loads = []
+
+    def load(path_text, settings):
+        loads.append(Path(path_text).read_bytes())
+        if len(loads) == 1:
+            path.write_bytes(b"replacement written during the decode")
+        return np.full((2, 2, 3), len(loads) * 0.1), None
+
+    monkeypatch.setattr(server, "_RAW_CACHE", None)
+    monkeypatch.setattr(server, "load_raw_image", load)
+    server.import_raw_cmd({"path": str(path)})
+    result = server._resolve_preview_image({"source": "raw", "image_path": str(path)})
+    assert result["raw_cache"] == "miss"
+    assert len(loads) == 2
+    assert loads[0] != loads[1]
+
 
 def test_png_encoder_writes_a_header_and_rejects_a_short_buffer():
     png = server.encode_png_rgb8(bytes([10, 20, 30, 40, 50, 60]), 2, 1)
